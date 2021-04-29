@@ -142,7 +142,7 @@ if __name__ == '__main__':
             #     finally:
             #         client_socket.close()
     except KeyboardInterrupt as e:
-        print(e)
+        print("Shutdown may leave some temp files in local directory")
     finally:
         print("Shutting Down Server")
         try:
