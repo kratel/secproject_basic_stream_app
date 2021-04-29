@@ -4,6 +4,7 @@ import pickle
 import struct
 import threading
 import argparse
+import errno
 
 watching = True
 
@@ -70,6 +71,11 @@ if __name__ == '__main__':
     except struct.error as e:
         # Handle case when server stops sending data, i.e. stream ended
         if len(packed_msg_size) == 0:
+            print("Stream has ended")
+        else:
+            raise e
+    except ConnectionResetError as e:
+        if e.errno == errno.ECONNRESET:
             print("Stream has ended")
         else:
             raise e
