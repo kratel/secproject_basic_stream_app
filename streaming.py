@@ -48,11 +48,7 @@ def capture_frames():
             cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1)
 
         with lock:
-            time.sleep(1)
-            print("start")
             outputFrame = frame.copy()
-            print("end")
-            time.sleep(1)
             # cv2.imshow("RECEIVING VIDEO",outputFrame)
             # cv2.waitKey()
 
