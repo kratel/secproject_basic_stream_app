@@ -54,10 +54,10 @@ def capture_frames():
 
         with lock:
             outputFrame = frame.copy()
-            for sq in message_queues:
-                serializedFrame = pickle.dumps(outputFrame)
-                message = struct.pack("Q",len(serializedFrame))+serializedFrame
-                message_queues[sq].put(message)
+            # for sq in message_queues:
+            #     serializedFrame = pickle.dumps(outputFrame)
+            #     message = struct.pack("Q",len(serializedFrame))+serializedFrame
+            #     message_queues[s].put(message)
             # cv2.imshow("RECEIVING VIDEO",outputFrame)
             # cv2.waitKey()
 
@@ -149,18 +149,24 @@ if __name__ == '__main__':
                         #     serializedFrame = pickle.dumps(outputFrame)
                         #     message = struct.pack("Q",len(serializedFrame))+serializedFrame
                         #     message_queues[s].put(message)
-                        write_list.append(client_socket)
+                        # write_list.append(client_socket)
                 else:
                     print("reading from a non server socket")
                     data = s.recv(1024)
                     print("reading from a non server socket")
                     if data == b'READY':
-                        # with lock:
-                        #     serializedFrame = pickle.dumps(outputFrame)
-                        #     message = struct.pack("Q",len(serializedFrame))+serializedFrame
-                        #     message_queues[s].put(message)
+                        with lock:
+                            serializedFrame = pickle.dumps(outputFrame)
+                            message = struct.pack("Q",len(serializedFrame))+serializedFrame
+                            message_queues[s].put(message)
                         if s not in write_list:
                             write_list.append(s)
+                    elif data == b'LEAVING':
+                        if s in write_list:
+                            write_list.remove(s)
+                        read_list.remove(s)
+                        s.close()
+                        del message_queues[s]
                     else:
                         print("going to remove a non server socket")
                         if s in write_list:
@@ -180,7 +186,7 @@ if __name__ == '__main__':
                     next_msg = message_queues[s].get_nowait()
                 except queue.Empty:
                     print("in except in write_list")
-                    # write_list.remove(s)
+                    write_list.remove(s)
                 else:
                     print("sending in write_list")
                     s.sendall(next_msg)
