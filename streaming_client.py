@@ -38,9 +38,11 @@ if __name__ == '__main__':
         # Specify size as 8 bytes
         payload_size = struct.calcsize("Q")
         while watching:
+            client_socket.sendall(b"READY")
             # Grab packet
             while len(data) < payload_size:
                 packet = client_socket.recv(4*1024)
+                print("some data received")
                 if not packet: break
                 data+=packet
             # Get packed size of received data, first 8 bytes of packet
@@ -63,6 +65,7 @@ if __name__ == '__main__':
             key = cv2.waitKey(1) & 0xFF
             if key  == ord('q') or not watching:
                 print("Leaving the Stream")
+                client_socket.sendall(b"LEAVING")
                 break
     except struct.error as e:
         # Handle case when server stops sending data, i.e. stream ended
