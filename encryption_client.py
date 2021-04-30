@@ -8,6 +8,29 @@ from cryptography.hazmat.primitives.asymmetric import dh
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.serialization import PublicFormat, Encoding, load_der_public_key
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+# TODO: maybe add tags into encrypt and use in decrypt
+def encrypt(key, plaintext, iv):
+    # Declare cipher type
+    cipher = Cipher(algorithms.AES(key), modes.OFB(iv))
+    encryptor = cipher.encryptor()
+
+    # Encrypt
+    ciphertext = encryptor.update(plaintext) + encryptor.finalize()
+
+    return ciphertext
+
+def decrypt(key, plaintext, iv):
+    # Declare cipher type
+    cipher = Cipher(algorithms.AES(derived_key), modes.OFB(derived_iv))
+    decryptor = cipher.decryptor()
+
+    # Decrypt
+    deciphered_text = decryptor.update(ciphertext) + decryptor.finalize()
+
+    return deciphered_text
+
 
 if __name__ == '__main__':
     # Handle arguments
@@ -43,6 +66,8 @@ if __name__ == '__main__':
         print("Connecting to server...")
         client_socket.connect((host_ip,port)) # a tuple
 
+        # === DH KEY EXCHANGE START ===
+
         # Receiving size of server's public key and server's public key
         size = client_socket.recv(2)
         server_public_key_enc = client_socket.recv(int.from_bytes(size, "big"))
@@ -63,6 +88,28 @@ if __name__ == '__main__':
         # Derive Key from shared key, length is in byte (32 byte = 256 bit)
         derived_key = HKDF(algorithm=hashes.SHA256(),length=32,salt=None,info=b'handshake data',).derive(shared_key)
         print("Derived Key:\n", derived_key)
+
+        # === DH KEY EXCHANGE END ===
+
+        # === AES with OFB START ===
+        # The above 32 byte derived_key will be used as the key.
+        # A 16 byte IV will be derived so both client and server has the same IV.
+        derived_iv = HKDF(algorithm=hashes.SHA256(),length=16,salt=None,info=b'aes ofb iv',).derive(shared_key)
+        print("Derived IV:\n", derived_iv)
+
+        # Receive data and decrypt
+        i = 0
+        while i<2:
+            size = client_socket.recv(2)
+            ciphertext = client_socket.recv(int.from_bytes(size, "big"))
+            deciphered_text = decrypt(derived_key, ciphertext, derived_iv)
+            print("deciphered_text:", len(deciphered_text), "\n", deciphered_text)
+            i += 1
+
+        # === AES with OFB END ===
+
+
+
 
 
     except struct.error as e:
