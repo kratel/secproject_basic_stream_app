@@ -91,8 +91,8 @@ if __name__ == '__main__':
         shared_key = server_private_key.exchange(client_public_key)
         print("Shared Key:\n", shared_key)
 
-        # Derive Key from shared key
-        derived_key = HKDF(algorithm=hashes.SHA256(),length=256,salt=None,info=b'handshake data',).derive(shared_key)
+        # Derive Key from shared key, length is in byte (32 byte = 256 bit)
+        derived_key = HKDF(algorithm=hashes.SHA256(),length=32,salt=None,info=b'handshake data',).derive(shared_key)
         print("Derived Key:\n", derived_key)
 
                     
