@@ -9,6 +9,7 @@ from cryptography.hazmat.primitives.asymmetric import dh
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.serialization import PublicFormat, Encoding, load_der_public_key
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 # # Modular Exponentiation: https://crypto.stackexchange.com/questions/75408/efficient-function-algorithm-method-to-do-modular-exponentiation
 # # Not used since cryptography library did all the DH work
@@ -25,6 +26,27 @@ from cryptography.hazmat.primitives.serialization import PublicFormat, Encoding,
 #         base = (base * base) % mod
 
 #     return result
+
+# TODO: maybe add tags into encrypt and use in decrypt
+def encrypt(key, plaintext, iv):
+    # Declare cipher type
+    cipher = Cipher(algorithms.AES(key), modes.OFB(iv))
+    encryptor = cipher.encryptor()
+
+    # Encrypt
+    ciphertext = encryptor.update(plaintext) + encryptor.finalize()
+
+    return ciphertext
+
+def decrypt(key, plaintext, iv):
+    # Declare cipher type
+    cipher = Cipher(algorithms.AES(derived_key), modes.OFB(derived_iv))
+    decryptor = cipher.decryptor()
+
+    # Decrypt
+    deciphered_text = decryptor.update(ciphertext) + decryptor.finalize()
+
+    return deciphered_text
 
 
 if __name__ == '__main__':
@@ -74,6 +96,8 @@ if __name__ == '__main__':
         print("waiting for connection - before accept")
         client_socket,(caddr, cport) = server_socket.accept()
 
+        # === DH KEY EXCHANGE START ===
+
         # Send size of public key and public key to client
         client_socket.send(len(server_public_key_enc).to_bytes(2, "big") + server_public_key_enc)
         print("Sent server's public key to ", caddr, ":", cport)
@@ -94,6 +118,28 @@ if __name__ == '__main__':
         # Derive Key from shared key, length is in byte (32 byte = 256 bit)
         derived_key = HKDF(algorithm=hashes.SHA256(),length=32,salt=None,info=b'handshake data',).derive(shared_key)
         print("Derived Key:\n", derived_key)
+
+        # === DH KEY EXCHANGE END ===
+
+        # === AES with OFB START ===
+        # The above 32 byte derived_key will be used as the key.
+        # A 16 byte IV will be derived so both client and server has the same IV.
+        derived_iv = HKDF(algorithm=hashes.SHA256(),length=16,salt=None,info=b'aes ofb iv',).derive(shared_key)
+        print("Derived IV:\n", derived_iv)
+        
+        # Encrypt
+        plaintext1 = 'A'*256
+        plaintext2 = 'B'*2048
+        ciphertext1 = encrypt(derived_key, plaintext1.encode(), derived_iv)
+        ciphertext2 = encrypt(derived_key, plaintext2.encode(), derived_iv)
+        print("ciphertext1:", len(ciphertext1), "\n", ciphertext1)
+        print("ciphertext2:", len(ciphertext2), "\n", ciphertext2)
+
+        # Send ciphertexts to client
+        client_socket.send(len(ciphertext1).to_bytes(2, "big") + ciphertext1)
+        client_socket.send(len(ciphertext2).to_bytes(2, "big") + ciphertext2)
+
+        # === AES with OFB END ===
 
                     
     finally:
