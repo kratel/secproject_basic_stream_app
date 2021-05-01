@@ -57,12 +57,6 @@ def generate_dh_key_pairs():
     return (host_private_key, host_public_key_enc)
 
 def client_dh_key_exchange(host_socket, host_private_key, host_public_key_enc):
-    # Send Message to let server know it's going to send the public key
-    # host_socket.sendall(b"PUBK")
-    # Send size of public key and public key to remote
-    host_socket.send(len(host_public_key_enc).to_bytes(2, "big") + host_public_key_enc)
-    print("Sent host's public key to", host_ip, ":", port)
-    
     # Receiving size of remote's public key and remote's public key
     size = host_socket.recv(2)
     remote_public_key_enc = host_socket.recv(int.from_bytes(size, "big"))
@@ -71,6 +65,12 @@ def client_dh_key_exchange(host_socket, host_private_key, host_public_key_enc):
 
     # Decode remote's public key
     remote_public_key = load_der_public_key(remote_public_key_enc, default_backend())
+
+    # Send Message to let server know it's going to send the public key
+    # host_socket.send()
+    # Send size of public key and public key to remote
+    host_socket.send(b"PUBK" + len(host_public_key_enc).to_bytes(2, "big") + host_public_key_enc)
+    print("Sent host's public key to", host_ip, ":", port)
 
     # Generate shared key
     shared_key = host_private_key.exchange(remote_public_key)
