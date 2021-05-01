@@ -119,28 +119,6 @@ if __name__ == '__main__':
                 connThread = threading.Thread(target=new_client, args=(client_socket,))
                 threads.append(connThread)
                 connThread.start()
-            # if client_socket:
-            #     # vid = cv2.VideoCapture(0)
-            #     # global outputFrame, lock
-            #     try:
-            #         while stream:
-            #             # img,frame = vid.read()
-            #             with lock:
-            #                 serializedFrame = pickle.dumps(outputFrame)
-            #                 message = struct.pack("Q",len(serializedFrame))+serializedFrame
-            #                 client_socket.sendall(message)
-                            
-            #             if outputFrame is not None:
-            #                 pass
-            #                 # # Show the image, debugging
-            #                 # cv2.imshow('SERVER STREAMING VIDEO',outputFrame)
-            #                 # # Way to close the feed, required for imshow to work properly
-            #                 # key = cv2.waitKey(1) & 0xFF
-            #                 # if key ==ord('q') or not stream:
-            #                 #     # client_socket.close()
-            #                 #     break
-            #     finally:
-            #         client_socket.close()
     except KeyboardInterrupt as e:
         print("Shutdown may leave some temp files in local directory")
     finally:
