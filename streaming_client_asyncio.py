@@ -120,6 +120,10 @@ if __name__ == '__main__':
 
         # === DH KEY EXCHANGE END ===
 
+        # A 16 byte IV will be derived so both client and server has the same IV.
+        derived_iv = HKDF(algorithm=hashes.SHA256(),length=16,salt=None,info=b'aes ofb iv',).derive(shared_key)
+        print("Derived IV:\n", derived_iv)
+
         # initialize data var
         data = b""
         # Specify size as 8 bytes
@@ -144,6 +148,8 @@ if __name__ == '__main__':
                 data += client_socket.recv(4*1024)
             # Store the full frame data
             frame_data = data[:msg_size]
+            # Decrypt data
+            frame_data = decrypt(derived_key, frame_data, derived_iv)
             # Keep the tail data in data variable
             data = data[msg_size:]
             # Deserialize frame data

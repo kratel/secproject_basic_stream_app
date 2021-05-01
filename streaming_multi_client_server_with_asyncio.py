@@ -180,8 +180,13 @@ async def new_client(reader, writer):
                 with lock:
                     print("got LOCK")
                     serializedFrame = pickle.dumps(outputFrame)
-                    message = struct.pack("Q",len(serializedFrame))+serializedFrame
-                    print(struct.pack("Q",len(serializedFrame)))
+                    print("serializedFrame")
+                    print(serializedFrame[:10])
+                    encr_serializedFrame = encrypt(derived_key, serializedFrame, derived_iv)
+                    print("encr_serializedFrame")
+                    print(encr_serializedFrame[:10])
+                    message = struct.pack("Q",len(encr_serializedFrame))+encr_serializedFrame
+                    print(struct.pack("Q",len(encr_serializedFrame)))
                     # message = len(serializedFrame).to_bytes(8, "big")+serializedFrame
                     # print(len(serializedFrame).to_bytes(8, "big"))
                 print("sending FRAME")
