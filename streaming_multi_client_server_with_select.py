@@ -176,6 +176,7 @@ if __name__ == '__main__':
     print("Setting up server...")
     # Socket Create
     server_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     host_ip = args["host_ip"]
     port = args["port"]
     socket_address = (host_ip,port)
@@ -222,10 +223,11 @@ if __name__ == '__main__':
                         data = s.recv(4)
                         print(data)
                         if data == b'HELO':
+                            # s.recv(1)
                             message_queues[s].put(len(dh_keyexchanges[s][1]).to_bytes(2, "big") + dh_keyexchanges[s][1])
                             if s not in write_list:
                                 write_list.append(s)
-                        # elif data == b'PUBK':
+                        elif data == b'PUBK':
                             print(readable)
                             print(writable)
                             print(errored)
@@ -246,8 +248,8 @@ if __name__ == '__main__':
                             print("Derived IV:\n", derived_iv)
                             client_derived_keys_ivs[s] = (derived_key, derived_iv)
                             del dh_keyexchanges[s]
-                            # if s not in write_list:
-                            #     write_list.append(s)
+                            if s not in write_list:
+                                write_list.append(s)
                     else:
                         print("reading from a non server socket")
                         data = s.recv(1024)
