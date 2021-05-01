@@ -86,6 +86,13 @@ def generate_dh_key_pairs():
     host_public_key_enc= host_private_key.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
     return (host_private_key, host_public_key_enc)
 
+def generate_ecdh_key_pairs():
+    host_private_key = ec.generate_private_key(
+        ec.SECP384R1()
+    )
+    host_public_key_enc = host_private_key.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+    return (host_private_key, host_public_key_enc)
+
 def server_dh_key_exchange(client_socket, host_private_key, host_public_key_enc):
     # Send size of public key and public key to remote
     client_socket.send(len(host_public_key_enc).to_bytes(2, "big") + host_public_key_enc)
@@ -155,7 +162,10 @@ def server_dh_key_exchange(client_socket, host_private_key, host_public_key_enc)
     print("Sent host's signature to", caddr, ":", cport)
 
     # Generate shared key
+    # DH shared key
     shared_key = host_private_key.exchange(remote_public_key)
+    # ECDH shared key
+    #shared_key = host_private_key.exchange(ec.ECDH(), remote_public_key)
     return shared_key
 
 def encrypt_and_send_AES_OFB_message(client_socket, plaintext, key, iv):
