@@ -85,6 +85,13 @@ def generate_dh_key_pairs():
     host_public_key_enc= host_private_key.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
     return (host_private_key, host_public_key_enc)
 
+def generate_ecdh_key_pairs():
+    host_private_key = ec.generate_private_key(
+        ec.SECP384R1()
+    )
+    host_public_key_enc = host_private_key.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+    return (host_private_key, host_public_key_enc)
+
 def client_dh_key_exchange(host_socket, host_private_key, host_public_key_enc):
     # Receiving size of remote's public key and remote's public key
     size = host_socket.recv(2)
@@ -159,7 +166,10 @@ def client_dh_key_exchange(host_socket, host_private_key, host_public_key_enc):
     print("Message verified")
 
     # Generate shared key
+    # DH shared key
     shared_key = host_private_key.exchange(remote_public_key)
+    # ECDH shared key
+    #shared_key = host_private_key.exchange(ec.ECDH(), remote_public_key)
     print("Shared Key:\n", shared_key)
 
     # Derive Key from shared key, length is in byte (32 byte = 256 bit)
