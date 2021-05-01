@@ -38,15 +38,51 @@ def encrypt(key, plaintext, iv):
 
     return ciphertext
 
-def decrypt(key, plaintext, iv):
+def decrypt(key, ciphertext, iv):
     # Declare cipher type
-    cipher = Cipher(algorithms.AES(derived_key), modes.OFB(derived_iv))
+    cipher = Cipher(algorithms.AES(key), modes.OFB(iv))
     decryptor = cipher.decryptor()
 
     # Decrypt
     deciphered_text = decryptor.update(ciphertext) + decryptor.finalize()
 
     return deciphered_text
+
+def generate_dh_key_pairs():
+    # Hard-coded p and g for DH Key exchange (RFC 3526 - group id 14)
+    p = 0xFFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AACAA68FFFFFFFFFFFFFFFF
+    g = 2
+
+    # Use our p and g with cryptography library
+    params_numbers = dh.DHParameterNumbers(p,g)
+    parameters = params_numbers.parameters(default_backend())
+
+    # Generate private and public key
+    host_private_key = parameters.generate_private_key()
+    host_public_key_enc= host_private_key.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+    return (host_private_key, host_public_key_enc)
+
+def server_dh_key_exchange(client_socket, host_private_key, host_public_key_enc):
+    # Send size of public key and public key to remote
+    client_socket.send(len(host_public_key_enc).to_bytes(2, "big") + host_public_key_enc)
+    print("Sent host's public key to ", caddr, ":", cport)
+
+    # Receiving size of remote's public key and remote's public key
+    size = client_socket.recv(2)
+    remote_public_key_enc = client_socket.recv(int.from_bytes(size, "big"))
+    print("Size of remote's public key: ", int.from_bytes(size, "big"))
+    print("Remote's public key:\n", remote_public_key_enc)
+
+    # Decode remote's public key
+    remote_public_key = load_der_public_key(remote_public_key_enc, default_backend())
+
+    # Generate shared key
+    shared_key = host_private_key.exchange(remote_public_key)
+    return shared_key
+
+def encrypt_and_send_AES_OFB_message(client_socket, plaintext, key, iv):
+    ciphertext = encrypt(key, plaintext, iv)
+    client_socket.send(len(ciphertext).to_bytes(2, "big") + ciphertext)
 
 
 if __name__ == '__main__':
@@ -59,18 +95,19 @@ if __name__ == '__main__':
     args = vars(ap.parse_args())
 
     # Hard-coded p and g for DH Key exchange (RFC 3526 - group id 14)
-    p = 0xFFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AACAA68FFFFFFFFFFFFFFFF
-    g = 2
-    print("Using p =", p)
-    print("Using g =", g)
+    # p = 0xFFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AACAA68FFFFFFFFFFFFFFFF
+    # g = 2
+    # print("Using p =", p)
+    # print("Using g =", g)
 
-    # Use our p and g with cryptography library
-    params_numbers = dh.DHParameterNumbers(p,g)
-    parameters = params_numbers.parameters(default_backend())
+    # # Use our p and g with cryptography library
+    # params_numbers = dh.DHParameterNumbers(p,g)
+    # parameters = params_numbers.parameters(default_backend())
 
-    # Generate private and public key
-    server_private_key = parameters.generate_private_key()
-    server_public_key_enc= server_private_key.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+    # # Generate private and public key
+    # server_private_key = parameters.generate_private_key()
+    # server_public_key_enc= server_private_key.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+    server_private_key, server_public_key_enc = generate_dh_key_pairs()
     # server_public_key = load_der_public_key(server_public_key_enc, default_backend())
     # shared_key = server_private_key.exchange(server_public_key)
     print("Generated Public Key: \n", server_public_key_enc)
@@ -98,21 +135,7 @@ if __name__ == '__main__':
 
         # === DH KEY EXCHANGE START ===
 
-        # Send size of public key and public key to client
-        client_socket.send(len(server_public_key_enc).to_bytes(2, "big") + server_public_key_enc)
-        print("Sent server's public key to ", caddr, ":", cport)
-
-        # Receiving size of client's public key and client's public key
-        size = client_socket.recv(2)
-        client_public_key_enc = client_socket.recv(int.from_bytes(size, "big"))
-        print("Size of client's public key: ", int.from_bytes(size, "big"))
-        print("Client's public key:\n", client_public_key_enc)
-
-        # Decode client's public key
-        client_public_key = load_der_public_key(client_public_key_enc, default_backend())
-
-        # Generate shared key
-        shared_key = server_private_key.exchange(client_public_key)
+        shared_key = server_dh_key_exchange(client_socket, server_private_key, server_public_key_enc)
         print("Shared Key:\n", shared_key)
 
         # Derive Key from shared key, length is in byte (32 byte = 256 bit)
@@ -129,15 +152,17 @@ if __name__ == '__main__':
         
         # Encrypt
         plaintext1 = 'A'*256
-        plaintext2 = 'B'*2048
-        ciphertext1 = encrypt(derived_key, plaintext1.encode(), derived_iv)
-        ciphertext2 = encrypt(derived_key, plaintext2.encode(), derived_iv)
-        print("ciphertext1:", len(ciphertext1), "\n", ciphertext1)
-        print("ciphertext2:", len(ciphertext2), "\n", ciphertext2)
+        plaintext2 = 'B'*2048 * 2
+        encrypt_and_send_AES_OFB_message(client_socket, plaintext1.encode(), derived_key, derived_iv)
+        encrypt_and_send_AES_OFB_message(client_socket, plaintext2.encode(), derived_key, derived_iv)
+        # ciphertext1 = encrypt(derived_key, plaintext1.encode(), derived_iv)
+        # ciphertext2 = encrypt(derived_key, plaintext2.encode(), derived_iv)
+        # print("ciphertext1:", len(ciphertext1), "\n", ciphertext1)
+        # print("ciphertext2:", len(ciphertext2), "\n", ciphertext2)
 
         # Send ciphertexts to client
-        client_socket.send(len(ciphertext1).to_bytes(2, "big") + ciphertext1)
-        client_socket.send(len(ciphertext2).to_bytes(2, "big") + ciphertext2)
+        # client_socket.send(len(ciphertext1).to_bytes(2, "big") + ciphertext1)
+        # client_socket.send(len(ciphertext2).to_bytes(2, "big") + ciphertext2)
 
         # === AES with OFB END ===
 
