@@ -93,10 +93,10 @@ def new_client(client_socket, caddr):
 if __name__ == '__main__':
     # Handle arguments
     ap = argparse.ArgumentParser()
-    ap.add_argument("-i", "--host-ip", type=str, required=True,
-        help="ip address of the device")
-    ap.add_argument("-p", "--port", type=int, required=True,
-        help="ephemeral port number of the server (1024 to 65535)")
+    ap.add_argument("-i", "--host-ip", type=str, required=False,
+        help="ip address of the device", default='127.0.0.1')
+    ap.add_argument("-p", "--port", type=int, required=False,
+        help="ephemeral port number of the server (1024 to 65535)", default=7777)
     args = vars(ap.parse_args())
 
     print("Setting up server...")
