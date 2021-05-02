@@ -24,7 +24,7 @@ import queue
 import asyncio
 # For encryption
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import dh, rsa, padding
+from cryptography.hazmat.primitives.asymmetric import dh, rsa, padding, ec
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.serialization import PublicFormat, Encoding, load_der_public_key, load_pem_public_key, load_pem_private_key
@@ -44,6 +44,7 @@ p = 0xFFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B
 g = 2
 serialized_RSA_server_public_key = None
 RSA_server_private_key = None
+disable_ecdh = False
 
 # thread that listens for any input, used to terminate stream loop
 # def key_capture_thread(server_socket):
@@ -134,6 +135,13 @@ def generate_dh_key_pairs():
     host_public_key_enc= host_private_key.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
     return (host_private_key, host_public_key_enc)
 
+def generate_ecdh_key_pairs():
+    host_private_key = ec.generate_private_key(
+        ec.SECP384R1()
+    )
+    host_public_key_enc = host_private_key.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+    return (host_private_key, host_public_key_enc)
+
 # def server_dh_key_exchange(reader, writer, host_private_key, host_public_key_enc):
 #     # Send size of public key and public key to remote
 #     client_socket.send(len(host_public_key_enc).to_bytes(2, "big") + host_public_key_enc)
@@ -197,13 +205,17 @@ def verify(public_key, signature, message):
     )
 
 async def new_client(reader, writer):
-    global lock, stream, outputFrame, serialized_RSA_server_public_key, RSA_server_private_key
+    global lock, stream, outputFrame, serialized_RSA_server_public_key, RSA_server_private_key, disable_ecdh
     try:
         # if client_socket:
             # vid = cv2.VideoCapture(0)
             # global outputFrame, lock
         ## --------- DH Key EXCHANGE -----------##
-        host_private_key, host_public_key_enc = generate_dh_key_pairs()
+        if disable_ecdh:
+            host_private_key, host_public_key_enc = generate_dh_key_pairs()
+        else:
+            print("USING ECDH")
+            host_private_key, host_public_key_enc = generate_ecdh_key_pairs()
         data = await reader.read(4)
         size = None
         serialized_RSA_client_public_key = None
@@ -242,7 +254,10 @@ async def new_client(reader, writer):
             writer.write(len(host_signature).to_bytes(2, "big") + host_signature + b"DHFIN")
             await writer.drain()
             remote_public_key = load_der_public_key(remote_public_key_enc, default_backend())
-            shared_key = host_private_key.exchange(remote_public_key)
+            if disable_ecdh:
+                shared_key = host_private_key.exchange(remote_public_key)
+            else:
+                shared_key = host_private_key.exchange(ec.ECDH(), remote_public_key)
             derived_key = HKDF(algorithm=hashes.SHA256(),length=32,salt=None,info=b'handshake data',).derive(shared_key)
             print("Derived Key:\n", derived_key)
             derived_iv = HKDF(algorithm=hashes.SHA256(),length=16,salt=None,info=b'aes ofb iv',).derive(shared_key)
@@ -308,8 +323,11 @@ if __name__ == '__main__':
         help="Path to RSA PEM public key", default='env/keys/server/public-key.pem')
     ap.add_argument("--rsa-priv-key", type=str, required=False,
         help="Path to RSA PEM private key", default='env/keys/server/private-key.pem')
+    ap.add_argument("--disable-ecdh", type=bool, required=False,
+        help="Disable Elliptic Curve key generation for Diffie-Hellman Key Exchange", default=False)
     args = vars(ap.parse_args())
 
+    disable_ecdh = args["disable_ecdh"]
     RSA_server_public_key = None
     RSA_server_private_key = None
     with open(args["rsa_pub_key"], "rb") as key_file:
