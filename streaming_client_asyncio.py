@@ -12,8 +12,16 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.serialization import PublicFormat, Encoding, load_der_public_key, load_pem_public_key, load_pem_private_key
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.exceptions import InvalidSignature
 
 watching = True
+watch_char = {
+    0: "/",
+    1: "-",
+    2: "|",
+    3: "\\",
+    4: "|",
+}
 
 # thread that listens for any input, used to terminate stream loop
 def key_capture_thread():
@@ -56,7 +64,7 @@ def generate_dh_key_pairs():
     host_public_key_enc= host_private_key.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
     return (host_private_key, host_public_key_enc)
 
-def client_dh_key_exchange(host_socket, host_private_key, host_public_key_enc):
+def client_dh_key_exchange(host_socket, host_private_key, host_public_key_enc, serialized_RSA_server_public_key, serialized_RSA_client_public_key, RSA_client_private_key):
     # Receiving size of remote's public key and remote's public key
     size = host_socket.recv(2)
     remote_public_key_enc = host_socket.recv(int.from_bytes(size, "big"))
@@ -69,8 +77,20 @@ def client_dh_key_exchange(host_socket, host_private_key, host_public_key_enc):
     # Send Message to let server know it's going to send the public key
     # host_socket.send()
     # Send size of public key and public key to remote
-    host_socket.send(b"PUBK" + len(host_public_key_enc).to_bytes(2, "big") + host_public_key_enc)
+    message_to_be_signed = serialized_RSA_server_public_key + serialized_RSA_client_public_key + remote_public_key_enc + host_public_key_enc
+    message_signature = sign(RSA_client_private_key, message_to_be_signed)
+    host_socket.send(b"PUBK" +
+                    len(host_public_key_enc).to_bytes(2, "big") +
+                    host_public_key_enc +
+                    len(message_signature).to_bytes(2, "big") +
+                    message_signature)
     print("Sent host's public key to", host_ip, ":", port)
+    # Get server's signature
+    size = host_socket.recv(2)
+    remote_signature = host_socket.recv(int.from_bytes(size, "big"))
+    # Verify server's signature
+    intended_message = serialized_RSA_server_public_key + host_public_key_enc
+    verify(load_pem_public_key(serialized_RSA_server_public_key), remote_signature, intended_message)
 
     # Generate shared key
     shared_key = host_private_key.exchange(remote_public_key)
@@ -112,13 +132,24 @@ def sign(private_key, data):
 
     return signature
 
-watch_char = {
-    0: "/",
-    1: "-",
-    2: "|",
-    3: "\\",
-    4: "|",
-}
+def verify(public_key, signature, message):
+    print("IN VERIFY")
+    print("public_key:\n", public_key)
+    print("signature:\n", signature)
+    print("message:\n", message)
+    # Verify signature
+    public_key.verify(
+        signature,
+        message,
+        padding.PSS(
+            mgf=padding.MGF1(hashes.SHA256()),
+            salt_length=padding.PSS.MAX_LENGTH
+        ),
+        hashes.SHA256()
+    )
+
+
+
 
 if __name__ == '__main__':
     # Handle arguments
@@ -137,7 +168,6 @@ if __name__ == '__main__':
         help="Path to RSA PEM private key", default='env/keys/client/client_01/private-key.pem')
     args = vars(ap.parse_args())
 
-    ## --------- PKI Get Pub Keys START-----------##
     RSA_client_public_key = None
     RSA_client_private_key = None
     with open(args["rsa_pub_key"], "rb") as key_file:
@@ -153,20 +183,21 @@ if __name__ == '__main__':
     # Serialize keys
     serialized_RSA_client_public_key = RSA_client_public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
 
-    pki_client_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-    pki_host_ip = args["pki_host_ip"]
-    pki_port = args["pki_port"]
-    pki_client_socket.connect((pki_host_ip,pki_port))
-    response = registerPublicKey(pki_client_socket, serialized_RSA_client_public_key, RSA_client_private_key)
-    print("response:", response)
-    pki_client_socket.close()
-    ## --------- PKI Get Pub Keys END  -----------##
+    # ## --------- PKI Register Pub Keys START-----------##
+    # pki_client_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+    # pki_host_ip = args["pki_host_ip"]
+    # pki_port = args["pki_port"]
+    # pki_client_socket.connect((pki_host_ip,pki_port))
+    # response = registerPublicKey(pki_client_socket, serialized_RSA_client_public_key, RSA_client_private_key)
+    # print("response:", response)
+    # pki_client_socket.close()
+    # ## --------- PKI Register Pub Keys END  -----------##
 
     # create socket
     client_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
     host_ip = args["host_ip"]
     port = args["port"]
-
+    abort = False
     threading.Thread(target=key_capture_thread, args=(), name='key_capture_thread', daemon=True).start()
     try:
 
@@ -174,11 +205,27 @@ if __name__ == '__main__':
         client_private_key, client_public_key_enc = generate_dh_key_pairs()
         # Initialize Connection
         client_socket.connect((host_ip,port)) # a tuple
+        serialized_RSA_server_public_key = None
+        initial_message = b"HELO" + len(serialized_RSA_client_public_key).to_bytes(2, "big") + serialized_RSA_client_public_key
+        client_socket.sendall(initial_message)
+        # === GET RSA PUBLIC KEY START ===
+        data = client_socket.recv(4)
+        if data == b"HELO":
+            size = client_socket.recv(2)
+            serialized_RSA_server_public_key = client_socket.recv(int.from_bytes(size, "big"))
+        else:
+            abort = True
+        # === GET RSA PUBLIC KEY END ===
 
-        client_socket.sendall(b"HELO")
+
         # === DH KEY EXCHANGE START ===
-
-        shared_key = client_dh_key_exchange(client_socket, client_private_key, client_public_key_enc)
+        client_socket.sendall(b"DHINI")
+        shared_key = client_dh_key_exchange(client_socket,
+                                            client_private_key,
+                                            client_public_key_enc,
+                                            serialized_RSA_server_public_key,
+                                            serialized_RSA_client_public_key,
+                                            RSA_client_private_key)
         print("ran DH func")
         data = client_socket.recv(5)
         print(data)
