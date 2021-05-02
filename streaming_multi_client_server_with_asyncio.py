@@ -42,7 +42,8 @@ dh_keyexchanges = {}
 client_derived_keys_ivs = {}
 p = 0xFFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AACAA68FFFFFFFFFFFFFFFF
 g = 2
-
+serialized_RSA_server_public_key = None
+RSA_server_private_key = None
 
 # thread that listens for any input, used to terminate stream loop
 # def key_capture_thread(server_socket):
@@ -183,35 +184,74 @@ def sign(private_key, data):
 
     return signature
 
+def verify(public_key, signature, message):
+    # Verify signature
+    public_key.verify(
+        signature,
+        message,
+        padding.PSS(
+            mgf=padding.MGF1(hashes.SHA256()),
+            salt_length=padding.PSS.MAX_LENGTH
+        ),
+        hashes.SHA256()
+    )
+
 async def new_client(reader, writer):
-    global lock, stream, outputFrame
+    global lock, stream, outputFrame, serialized_RSA_server_public_key, RSA_server_private_key
     try:
         # if client_socket:
             # vid = cv2.VideoCapture(0)
             # global outputFrame, lock
         ## --------- DH Key EXCHANGE -----------##
         host_private_key, host_public_key_enc = generate_dh_key_pairs()
-        writer.write(len(host_public_key_enc).to_bytes(2, "big") + host_public_key_enc)
-        await writer.drain()
         data = await reader.read(4)
-        print(data)
+        size = None
+        serialized_RSA_client_public_key = None
+        abort = False
+        if data == b"HELO":
+            size = await reader.read(2)
+            serialized_RSA_client_public_key = await reader.read(int.from_bytes(size, "big"))
+            initial_message = b"HELO" + len(serialized_RSA_server_public_key).to_bytes(2, "big") + serialized_RSA_server_public_key
+            writer.write(initial_message)
+            await writer.drain()
+        else:
+            abort = True
+        data = await reader.read(5)
+        if data == b"DHINI" and not abort:
+            writer.write(len(host_public_key_enc).to_bytes(2, "big") + host_public_key_enc)
+            await writer.drain()
+        else:
+            abort = True
         data = await reader.read(4)
-        print(data)
-        size = await reader.read(2)
-        remote_public_key_enc = await reader.read(int.from_bytes(size, "big"))
-        print("Size of remote's public key: ", int.from_bytes(size, "big"))
-        print("Remote's public key:\n", remote_public_key_enc)
-        remote_public_key = load_der_public_key(remote_public_key_enc, default_backend())
-        shared_key = host_private_key.exchange(remote_public_key)
-        derived_key = HKDF(algorithm=hashes.SHA256(),length=32,salt=None,info=b'handshake data',).derive(shared_key)
-        print("Derived Key:\n", derived_key)
-        derived_iv = HKDF(algorithm=hashes.SHA256(),length=16,salt=None,info=b'aes ofb iv',).derive(shared_key)
-        print("Derived IV:\n", derived_iv)
-        # client_derived_keys_ivs[s] = (derived_key, derived_iv)
-        ## --------- DH Key EXCHANGE -----------##
-        writer.write(b"DHFIN")
-        await writer.drain()
-        while stream:
+        if data == b"PUBK" and not abort:
+            # The ECDH Key
+            size = await reader.read(2)
+            remote_public_key_enc = await reader.read(int.from_bytes(size, "big"))
+            print("Size of remote's public key: ", int.from_bytes(size, "big"))
+            print("Remote's public key:\n", remote_public_key_enc)
+            # The message signature
+            size = await reader.read(2)
+            remote_signature = await reader.read(int.from_bytes(size, "big"))
+            intended_message = serialized_RSA_server_public_key + serialized_RSA_client_public_key + host_public_key_enc + remote_public_key_enc
+            verify(load_pem_public_key(serialized_RSA_client_public_key), remote_signature, intended_message)
+            print("Message Verified")
+            # The host_signature to prove the intended public key was received
+            host_message = serialized_RSA_server_public_key + remote_public_key_enc
+            with lock:
+                host_signature = sign(RSA_server_private_key, host_message)
+            writer.write(len(host_signature).to_bytes(2, "big") + host_signature + b"DHFIN")
+            await writer.drain()
+            remote_public_key = load_der_public_key(remote_public_key_enc, default_backend())
+            shared_key = host_private_key.exchange(remote_public_key)
+            derived_key = HKDF(algorithm=hashes.SHA256(),length=32,salt=None,info=b'handshake data',).derive(shared_key)
+            print("Derived Key:\n", derived_key)
+            derived_iv = HKDF(algorithm=hashes.SHA256(),length=16,salt=None,info=b'aes ofb iv',).derive(shared_key)
+            print("Derived IV:\n", derived_iv)
+            # client_derived_keys_ivs[s] = (derived_key, derived_iv)
+            ## --------- DH Key EXCHANGE -----------##
+        else:
+            abort = True
+        while stream and not abort:
             # img,frame = vid.read()
             data = await reader.read(1024)
             if data == b'READY':
@@ -270,7 +310,6 @@ if __name__ == '__main__':
         help="Path to RSA PEM private key", default='env/keys/server/private-key.pem')
     args = vars(ap.parse_args())
 
-    ## --------- PKI Get Pub Keys START-----------##
     RSA_server_public_key = None
     RSA_server_private_key = None
     with open(args["rsa_pub_key"], "rb") as key_file:
@@ -285,15 +324,15 @@ if __name__ == '__main__':
 
     # Serialize keys
     serialized_RSA_server_public_key = RSA_server_public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
-
-    pki_client_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-    pki_host_ip = args["pki_host_ip"]
-    pki_port = args["pki_port"]
-    pki_client_socket.connect((pki_host_ip,pki_port))
-    response = registerPublicKey(pki_client_socket, serialized_RSA_server_public_key, RSA_server_private_key)
-    print("response:", response)
-    pki_client_socket.close()
-    ## --------- PKI Get Pub Keys END  -----------##
+    # ## --------- PKI Register Pub Keys START-----------##
+    # pki_client_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+    # pki_host_ip = args["pki_host_ip"]
+    # pki_port = args["pki_port"]
+    # pki_client_socket.connect((pki_host_ip,pki_port))
+    # response = registerPublicKey(pki_client_socket, serialized_RSA_server_public_key, RSA_server_private_key)
+    # print("response:", response)
+    # pki_client_socket.close()
+    # ## --------- PKI Register Pub Keys END  -----------##
 
     print("Setting up server...")
     # Socket Create

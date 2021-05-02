@@ -155,8 +155,8 @@ def client_dh_key_exchange(host_socket, host_private_key, host_public_key_enc):
     print("Sent host's public key and signature to", host_ip, ":", port)
 
     # Receiving size of remote's signature and remote's signature
-    size = client_socket.recv(2)
-    remote_sigature = client_socket.recv(int.from_bytes(size, "big"))
+    size = host_socket.recv(2)
+    remote_sigature = host_socket.recv(int.from_bytes(size, "big"))
     print("Size of remote's signature: ", int.from_bytes(size, "big"))
     print("Remote's signature:\n", remote_sigature)
 
