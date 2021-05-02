@@ -6,7 +6,7 @@ import threading
 import argparse
 import errno
 # For encryption
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import hashes, hmac
 from cryptography.hazmat.primitives.asymmetric import dh, rsa, padding, ec
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.backends import default_backend
@@ -249,16 +249,23 @@ if __name__ == '__main__':
         print(data)
         if data == b"DHFIN":
             print("DH Exchange complete")
+        # === DH KEY EXCHANGE END ===
+
         # Derive Key from shared key, length is in byte (32 byte = 256 bit)
         derived_key = HKDF(algorithm=hashes.SHA256(),length=32,salt=None,info=b'handshake data',).derive(shared_key)
         print("Derived Key:\n", derived_key)
-
-        # === DH KEY EXCHANGE END ===
 
         # A 16 byte IV will be derived so both client and server has the same IV.
         derived_iv = HKDF(algorithm=hashes.SHA256(),length=16,salt=None,info=b'aes ofb iv',).derive(shared_key)
         print("Derived IV:\n", derived_iv)
 
+        # HMAC key
+        derived_hmac_key = HKDF(algorithm=hashes.SHA256(),length=32,salt=None,info=b'mac',).derive(shared_key)
+
+        # Session ID
+        derived_session_id = HKDF(algorithm=hashes.SHA256(),length=32,salt=None,info=b'session id',).derive(shared_key)
+
+        component_id_tracker = 0
         # initialize data var
         data = b""
         # Specify size as 8 bytes
@@ -282,17 +289,53 @@ if __name__ == '__main__':
                 if not packet: break
                 data+=packet
             # print("# Get packed size of received data, first 8 bytes of packet")
-            packed_msg_size = data[:payload_size]
+            # TODO check if these are  len 0
+            recv_hmac_sig = data[:32]
+            if len(recv_hmac_sig) != 32:
+                continue
+            remote_session_id = data[32:32+32]
+            if len(remote_session_id) != 32:
+                continue
+            remote_bytes_component_id = data[32+32:32+32+4]
+            if len(remote_bytes_component_id) != 4:
+                continue
+            packed_msg_size = data[32+32+4:32+32+4+payload_size]
+            if len(packed_msg_size) !=  payload_size:
+                continue
             # print(packed_msg_size)
             # print("# Get the initial frame data, eveything after the first 8 bytes")
-            data = data[payload_size:]
+            data = data[32+32+4+payload_size:]
             # Unpack to get real size of expected message
             msg_size = struct.unpack("Q",packed_msg_size)[0]
+            # if msg_size > 1536165:
+
             # Get the rest of the frame data
-            while len(data) < msg_size:
+            while (len(data) < msg_size) and (len(data) < 1536165):
                 data += client_socket.recv(4*1024)
             # Store the full frame data
             frame_data = data[:msg_size]
+
+            ## Verification
+            # Verify HMAC
+            recv_message = remote_session_id + remote_bytes_component_id + packed_msg_size + frame_data
+            h = hmac.HMAC(derived_hmac_key, hashes.SHA256())
+            h.update(recv_message)
+            try:
+                h.verify(recv_hmac_sig)
+            except InvalidSignature as e:
+                continue
+
+            # Verify session id matches
+            if derived_session_id != remote_session_id:
+                continue
+
+            # Verify component id increased
+            remote_int_component_id = int.from_bytes(remote_bytes_component_id, "big")
+            if remote_int_component_id <= component_id_tracker:
+                continue
+            else:
+                component_id_tracker = remote_int_component_id
+
             # Decrypt data
             frame_data = decrypt(derived_key, frame_data, derived_iv)
             # Keep the tail data in data variable
