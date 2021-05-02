@@ -23,7 +23,7 @@ import queue
 # Needed to handle async calls
 import asyncio
 # For encryption
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import hashes, hmac
 from cryptography.hazmat.primitives.asymmetric import dh, rsa, padding, ec
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.backends import default_backend
@@ -208,10 +208,14 @@ def verify(public_key, signature, message):
 async def new_client(reader, writer):
     global lock, stream, outputFrame, serialized_RSA_server_public_key, RSA_server_private_key, disable_ecdh, loop
     try:
+        addr =  writer.get_extra_info('peername')
+        print(addr)
+        # addr =  reader.get_extra_info('peername')
+        # print(addr)
         # if client_socket:
             # vid = cv2.VideoCapture(0)
             # global outputFrame, lock
-        ## --------- DH Key EXCHANGE -----------##
+        ## --------- DH Key EXCHANGE START -----------##
         if disable_ecdh:
             host_private_key, host_public_key_enc = generate_dh_key_pairs()
         else:
@@ -259,12 +263,20 @@ async def new_client(reader, writer):
                 shared_key = host_private_key.exchange(remote_public_key)
             else:
                 shared_key = host_private_key.exchange(ec.ECDH(), remote_public_key)
+            # client_derived_keys_ivs[s] = (derived_key, derived_iv)
+            ## --------- DH Key EXCHANGE END -----------##
+
             derived_key = HKDF(algorithm=hashes.SHA256(),length=32,salt=None,info=b'handshake data',).derive(shared_key)
             print("Derived Key:\n", derived_key)
             derived_iv = HKDF(algorithm=hashes.SHA256(),length=16,salt=None,info=b'aes ofb iv',).derive(shared_key)
             print("Derived IV:\n", derived_iv)
-            # client_derived_keys_ivs[s] = (derived_key, derived_iv)
-            ## --------- DH Key EXCHANGE -----------##
+
+            # HMAC key
+            derived_hmac_key = HKDF(algorithm=hashes.SHA256(),length=32,salt=None,info=b'mac',).derive(shared_key)
+
+            # Session ID
+            derived_session_id = HKDF(algorithm=hashes.SHA256(),length=32,salt=None,info=b'session id',).derive(shared_key)
+            component_id = 1
         else:
             abort = True
         while stream and not abort:
@@ -277,16 +289,30 @@ async def new_client(reader, writer):
                     serializedFrame = pickle.dumps(outputFrame)
                     # print("serializedFrame")
                     # print(serializedFrame[:10])
-                    encr_serializedFrame = encrypt(derived_key, serializedFrame, derived_iv)
-                    # print("encr_serializedFrame")
-                    # print(encr_serializedFrame[:10])
-                    message = struct.pack("Q",len(encr_serializedFrame))+encr_serializedFrame
-                    # print(struct.pack("Q",len(encr_serializedFrame)))
-                    # message = len(serializedFrame).to_bytes(8, "big")+serializedFrame
-                    # print(len(serializedFrame).to_bytes(8, "big"))
+                encr_serializedFrame = encrypt(derived_key, serializedFrame, derived_iv)
+                # print("encr_serializedFrame")
+                # print(encr_serializedFrame[:10])
+                message = derived_session_id
+                bytes_component_id = component_id.to_bytes(4,"big")
+                message += bytes_component_id
+                # when width was 800
+                # 1200165 when aspect ratio was 16:10
+                # 1080165 when aspect ratio was 16:9
+                # print("len encr_serializedFrame")
+                # print(len(encr_serializedFrame))
+                message += struct.pack("Q",len(encr_serializedFrame))+encr_serializedFrame
+                # Make an hmac for message
+                h = hmac.HMAC(derived_hmac_key, hashes.SHA256())
+                h.update(message)
+                message_hmac = h.finalize()
+                message = message_hmac + message
+                # print(struct.pack("Q",len(encr_serializedFrame)))
+                # message = len(serializedFrame).to_bytes(8, "big")+serializedFrame
+                # print(len(serializedFrame).to_bytes(8, "big"))
                 # print("sending FRAME")
                 writer.write(message)
                 await writer.drain()
+                component_id += 1
             elif data == b'LEAVING':
                 break    
             if outputFrame is not None:
@@ -305,6 +331,8 @@ async def new_client(reader, writer):
         # raise e
     except asyncio.TimeoutError:
         print('Client Timed out')
+    except ConnectionResetError as e:
+        print('Client left unexpectdly')
     finally:
         writer.close()
 
