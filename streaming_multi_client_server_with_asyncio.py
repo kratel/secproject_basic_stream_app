@@ -11,7 +11,7 @@ import numpy as np
 import pyautogui
 import imutils
 import cv2
-from PIL import UnidentifiedImageError
+from PIL import UnidentifiedImageError, Image, ImageFile
 import os
 # Needed for network communication
 import socket
@@ -24,12 +24,13 @@ import queue
 import asyncio
 # For encryption
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import dh
+from cryptography.hazmat.primitives.asymmetric import dh, rsa, padding
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives.serialization import PublicFormat, Encoding, load_der_public_key
+from cryptography.hazmat.primitives.serialization import PublicFormat, Encoding, load_der_public_key, load_pem_public_key, load_pem_private_key
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 # Globals for handling the frames
 outputFrame = None
 lock = threading.Lock()
@@ -54,7 +55,12 @@ def capture_frames():
     global outputFrame, lock, stream, message_queues
     # threading.Thread(target=key_capture_thread, args=(), name='key_capture_thread', daemon=True).start()
     try:
+        # while not event.is_set():
         while stream:
+            ##
+            # im = Image.open('.screenshot2021-0501_20-10-04-094593.png')
+            # im.load()
+            ##
             # Grab a screenshot
             frame = pyautogui.screenshot()
             # Convert it cv2 color format and np array
@@ -85,7 +91,14 @@ def capture_frames():
         filename = quoted_filename.strip("'")
         if os.path.exists(filename):
             os.remove(filename)
-        print("Deleted leftover temp image file")
+            print("Deleted leftover temp image file")
+    except OSError as e:
+        if e.errno == 2:
+            # Temp file was not written to disk
+            pass
+        else:
+            raise e
+
 
 def encrypt(key, plaintext, iv):
     # Declare cipher type
@@ -142,6 +155,34 @@ def encrypt_and_send_AES_OFB_message(client_socket, plaintext, key, iv):
     ciphertext = encrypt(key, plaintext, iv)
     client_socket.send(len(ciphertext).to_bytes(2, "big") + ciphertext)
 
+def lookupIP(client_socket, public_key):
+    client_socket.send(b'1')
+    client_socket.send(len(public_key).to_bytes(2, "big") + public_key)
+    output = client_socket.recv(1024)
+
+    return output
+
+def registerPublicKey(client_socket, public_key, private_key):
+    client_socket.send(b'0')
+    signed_public_key = sign(private_key, public_key)
+    client_socket.send(len(public_key).to_bytes(2, "big") + public_key)
+    client_socket.send(len(signed_public_key).to_bytes(2, "big") + signed_public_key)
+    output = client_socket.recv(1024)
+
+    return output
+
+def sign(private_key, data):
+    signature = private_key.sign(
+        data,
+        padding.PSS(
+            mgf=padding.MGF1(hashes.SHA256()),
+            salt_length=padding.PSS.MAX_LENGTH
+        ),
+        hashes.SHA256()
+    )
+
+    return signature
+
 async def new_client(reader, writer):
     global lock, stream, outputFrame
     try:
@@ -154,8 +195,6 @@ async def new_client(reader, writer):
         await writer.drain()
         data = await reader.read(4)
         print(data)
-        # writer.write(len(host_public_key_enc).to_bytes(2, "big") + host_public_key_enc)
-        # await writer.drain()
         data = await reader.read(4)
         print(data)
         size = await reader.read(2)
@@ -176,20 +215,20 @@ async def new_client(reader, writer):
             # img,frame = vid.read()
             data = await reader.read(1024)
             if data == b'READY':
-                print("got a READY")
+                # print("got a READY")
                 with lock:
-                    print("got LOCK")
+                    # print("got LOCK")
                     serializedFrame = pickle.dumps(outputFrame)
-                    print("serializedFrame")
-                    print(serializedFrame[:10])
+                    # print("serializedFrame")
+                    # print(serializedFrame[:10])
                     encr_serializedFrame = encrypt(derived_key, serializedFrame, derived_iv)
-                    print("encr_serializedFrame")
-                    print(encr_serializedFrame[:10])
+                    # print("encr_serializedFrame")
+                    # print(encr_serializedFrame[:10])
                     message = struct.pack("Q",len(encr_serializedFrame))+encr_serializedFrame
-                    print(struct.pack("Q",len(encr_serializedFrame)))
+                    # print(struct.pack("Q",len(encr_serializedFrame)))
                     # message = len(serializedFrame).to_bytes(8, "big")+serializedFrame
                     # print(len(serializedFrame).to_bytes(8, "big"))
-                print("sending FRAME")
+                # print("sending FRAME")
                 writer.write(message)
                 await writer.drain()
             elif data == b'LEAVING':
@@ -203,6 +242,9 @@ async def new_client(reader, writer):
                 # if key ==ord('q') or not stream:
                 #     # client_socket.close()
                 #     break
+    except KeyboardInterrupt as e:
+        print("\nClient Task was canceled")
+        raise e
     finally:
         writer.close()
 
@@ -214,11 +256,44 @@ async def boot_server(host_ip, port):
 if __name__ == '__main__':
     # Handle arguments
     ap = argparse.ArgumentParser()
-    ap.add_argument("-i", "--host-ip", type=str, required=True,
-        help="ip address of the device")
-    ap.add_argument("-p", "--port", type=int, required=True,
-        help="ephemeral port number of the server (1024 to 65535)")
+    ap.add_argument("-i", "--host-ip", type=str, required=False,
+        help="ip address to serve on", default='127.0.0.1')
+    ap.add_argument("-p", "--port", type=int, required=False,
+        help="port number to listen to", default=9898)
+    ap.add_argument("--pki-host-ip", type=str, required=False,
+        help="ip address of the PKI server to connect to", default='127.0.0.1')
+    ap.add_argument("--pki-port", type=int, required=False,
+        help="PKI port number to connect to", default=7777)
+    ap.add_argument("--rsa-pub-key", type=str, required=False,
+        help="Path to RSA PEM public key", default='env/keys/server/public-key.pem')
+    ap.add_argument("--rsa-priv-key", type=str, required=False,
+        help="Path to RSA PEM private key", default='env/keys/server/private-key.pem')
     args = vars(ap.parse_args())
+
+    ## --------- PKI Get Pub Keys START-----------##
+    RSA_server_public_key = None
+    RSA_server_private_key = None
+    with open(args["rsa_pub_key"], "rb") as key_file:
+        RSA_server_public_key = load_pem_public_key(
+            key_file.read()
+        )
+    with open(args["rsa_priv_key"], "rb") as key_file:
+        RSA_server_private_key = load_pem_private_key(
+            key_file.read(),
+            password=None,
+        )
+
+    # Serialize keys
+    serialized_RSA_server_public_key = RSA_server_public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
+
+    pki_client_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+    pki_host_ip = args["pki_host_ip"]
+    pki_port = args["pki_port"]
+    pki_client_socket.connect((pki_host_ip,pki_port))
+    response = registerPublicKey(pki_client_socket, serialized_RSA_server_public_key, RSA_server_private_key)
+    print("response:", response)
+    pki_client_socket.close()
+    ## --------- PKI Get Pub Keys END  -----------##
 
     print("Setting up server...")
     # Socket Create
@@ -236,9 +311,10 @@ if __name__ == '__main__':
     # server_socket.setblocking(False)
 
     
-
+    # event = threading.Event()
     # threading.Thread(target=key_capture_thread, args=(server_socket,), name='key_capture_thread', daemon=True).start()
-    threading.Thread(target=capture_frames, args=(), name='capture_frames', daemon=False).start()
+    cap_frame_thread = threading.Thread(target=capture_frames, args=(), name='capture_frames', daemon=False)
+    cap_frame_thread.start()
     threads = []
     
     print("LISTENING AT:",socket_address)
@@ -246,10 +322,40 @@ if __name__ == '__main__':
     loop.create_task(boot_server(host_ip, port))
     try:
         loop.run_forever()
+        # event.wait()
     except KeyboardInterrupt:
         print("\nServer is manually shutting down")
         stream = False
+        cap_frame_thread.join()
+        # event.set()
     finally:
         print("Shutting Down Server")
-        loop.stop()
-        loop.run_until_complete(loop.shutdown_asyncgens())
+        # try:
+        #     loop.stop()
+        #     loop.run_until_complete(loop.shutdown_asyncgens())
+        # try:
+        #     # loop.stop()
+        #     pending = asyncio.all_tasks()
+        #     for task in penging:
+        #         task.cancel()
+        #         with suppress(asyncio.CancelledError):
+        #             loop.run_until_complete(task)
+        #     # loop.stop()
+        #     # loop.run_until_complete(loop.shutdown_asyncgens())
+        # try:
+        #     loop.stop()
+        #     pending = asyncio.all_tasks()
+        #     loop.run_until_complete(asyncio.gather(*pending))
+        try:
+            loop.stop()
+            pending = asyncio.all_tasks()
+            for task in pending:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    loop.run_until_complete(task)
+            # loop.run_until_complete(asyncio.gather(*pending))
+        except RuntimeError as e:
+            if e.args[0] == 'no running event loop':
+                pass
+            else:
+                raise e
