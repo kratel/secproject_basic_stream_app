@@ -7,7 +7,7 @@ import argparse
 import errno
 # For encryption
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import dh, rsa, padding
+from cryptography.hazmat.primitives.asymmetric import dh, rsa, padding, ec
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.serialization import PublicFormat, Encoding, load_der_public_key, load_pem_public_key, load_pem_private_key
@@ -22,6 +22,7 @@ watch_char = {
     3: "\\",
     4: "|",
 }
+disable_ecdh = False
 
 # thread that listens for any input, used to terminate stream loop
 def key_capture_thread():
@@ -64,7 +65,15 @@ def generate_dh_key_pairs():
     host_public_key_enc= host_private_key.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
     return (host_private_key, host_public_key_enc)
 
+def generate_ecdh_key_pairs():
+    host_private_key = ec.generate_private_key(
+        ec.SECP384R1()
+    )
+    host_public_key_enc = host_private_key.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+    return (host_private_key, host_public_key_enc)
+
 def client_dh_key_exchange(host_socket, host_private_key, host_public_key_enc, serialized_RSA_server_public_key, serialized_RSA_client_public_key, RSA_client_private_key):
+    global disable_ecdh
     # Receiving size of remote's public key and remote's public key
     size = host_socket.recv(2)
     remote_public_key_enc = host_socket.recv(int.from_bytes(size, "big"))
@@ -93,7 +102,10 @@ def client_dh_key_exchange(host_socket, host_private_key, host_public_key_enc, s
     verify(load_pem_public_key(serialized_RSA_server_public_key), remote_signature, intended_message)
 
     # Generate shared key
-    shared_key = host_private_key.exchange(remote_public_key)
+    if disable_ecdh:
+        shared_key = host_private_key.exchange(remote_public_key)
+    else:
+        shared_key = host_private_key.exchange(ec.ECDH(), remote_public_key)
     print("Shared Key:\n", shared_key)
 
     return shared_key
@@ -166,8 +178,11 @@ if __name__ == '__main__':
         help="Path to RSA PEM public key", default='env/keys/client/client_01/public-key.pem')
     ap.add_argument("--rsa-priv-key", type=str, required=False,
         help="Path to RSA PEM private key", default='env/keys/client/client_01/private-key.pem')
+    ap.add_argument("--disable-ecdh", type=bool, required=False,
+        help="Disable Elliptic Curve key generation for Diffie-Hellman Key Exchange, needs to match server", default=False)
     args = vars(ap.parse_args())
 
+    disable_ecdh = args["disable_ecdh"]
     RSA_client_public_key = None
     RSA_client_private_key = None
     with open(args["rsa_pub_key"], "rb") as key_file:
@@ -202,7 +217,10 @@ if __name__ == '__main__':
     try:
 
         # Generate new dh key pairs before each connection
-        client_private_key, client_public_key_enc = generate_dh_key_pairs()
+        if disable_ecdh:
+            client_private_key, client_public_key_enc = generate_dh_key_pairs()
+        else:
+            client_private_key, client_public_key_enc = generate_ecdh_key_pairs()
         # Initialize Connection
         client_socket.connect((host_ip,port)) # a tuple
         serialized_RSA_server_public_key = None
