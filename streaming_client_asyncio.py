@@ -7,10 +7,10 @@ import argparse
 import errno
 # For encryption
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import dh
+from cryptography.hazmat.primitives.asymmetric import dh, rsa, padding
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives.serialization import PublicFormat, Encoding, load_der_public_key
+from cryptography.hazmat.primitives.serialization import PublicFormat, Encoding, load_der_public_key, load_pem_public_key, load_pem_private_key
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 watching = True
@@ -84,14 +84,83 @@ def receive_and_decrypt_AES_OFB_message(host_socket, derived_key, derived_iv):
     deciphered_text = decrypt(derived_key, ciphertext, derived_iv)
     return deciphered_text
 
+def lookupIP(client_socket, public_key):
+    client_socket.send(b'1')
+    client_socket.send(len(public_key).to_bytes(2, "big") + public_key)
+    output = client_socket.recv(1024)
+
+    return output
+
+def registerPublicKey(client_socket, public_key, private_key):
+    client_socket.send(b'0')
+    signed_public_key = sign(private_key, public_key)
+    client_socket.send(len(public_key).to_bytes(2, "big") + public_key)
+    client_socket.send(len(signed_public_key).to_bytes(2, "big") + signed_public_key)
+    output = client_socket.recv(1024)
+
+    return output
+
+def sign(private_key, data):
+    signature = private_key.sign(
+        data,
+        padding.PSS(
+            mgf=padding.MGF1(hashes.SHA256()),
+            salt_length=padding.PSS.MAX_LENGTH
+        ),
+        hashes.SHA256()
+    )
+
+    return signature
+
+watch_char = {
+    0: "/",
+    1: "-",
+    2: "|",
+    3: "\\",
+    4: "|",
+}
+
 if __name__ == '__main__':
     # Handle arguments
     ap = argparse.ArgumentParser()
-    ap.add_argument("-i", "--host-ip", type=str, required=True,
-        help="ip address of the server to connect to")
-    ap.add_argument("-p", "--port", type=int, required=True,
-        help="port number to connect to")
+    ap.add_argument("-i", "--host-ip", type=str, required=False,
+        help="ip address of the server to connect to", default='127.0.0.1')
+    ap.add_argument("-p", "--port", type=int, required=False,
+        help="port number to connect to", default=9898)
+    ap.add_argument("--pki-host-ip", type=str, required=False,
+        help="ip address of the PKI server to connect to", default='127.0.0.1')
+    ap.add_argument("--pki-port", type=int, required=False,
+        help="PKI port number to connect to", default=7777)
+    ap.add_argument("--rsa-pub-key", type=str, required=False,
+        help="Path to RSA PEM public key", default='env/keys/client/client_01/public-key.pem')
+    ap.add_argument("--rsa-priv-key", type=str, required=False,
+        help="Path to RSA PEM private key", default='env/keys/client/client_01/private-key.pem')
     args = vars(ap.parse_args())
+
+    ## --------- PKI Get Pub Keys START-----------##
+    RSA_client_public_key = None
+    RSA_client_private_key = None
+    with open(args["rsa_pub_key"], "rb") as key_file:
+        RSA_client_public_key = load_pem_public_key(
+            key_file.read()
+        )
+    with open(args["rsa_priv_key"], "rb") as key_file:
+        RSA_client_private_key = load_pem_private_key(
+            key_file.read(),
+            password=None,
+        )
+
+    # Serialize keys
+    serialized_RSA_client_public_key = RSA_client_public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
+
+    pki_client_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+    pki_host_ip = args["pki_host_ip"]
+    pki_port = args["pki_port"]
+    pki_client_socket.connect((pki_host_ip,pki_port))
+    response = registerPublicKey(pki_client_socket, serialized_RSA_client_public_key, RSA_client_private_key)
+    print("response:", response)
+    pki_client_socket.close()
+    ## --------- PKI Get Pub Keys END  -----------##
 
     # create socket
     client_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
@@ -100,6 +169,7 @@ if __name__ == '__main__':
 
     threading.Thread(target=key_capture_thread, args=(), name='key_capture_thread', daemon=True).start()
     try:
+
         # Generate new dh key pairs before each connection
         client_private_key, client_public_key_enc = generate_dh_key_pairs()
         # Initialize Connection
@@ -128,18 +198,28 @@ if __name__ == '__main__':
         data = b""
         # Specify size as 8 bytes
         payload_size = struct.calcsize("Q")
+        smud = 0
+        stracker = 0
         while watching:
             client_socket.send(b"READY")
             # Grab packet
             while len(data) < payload_size:
                 packet = client_socket.recv(4*1024)
-                print("some data received")
+                if smud < 200:
+                    if smud % 20 == 0:
+                        print(f"{watch_char[stracker]} watching stream {watch_char[stracker]}", end="\r")
+                        stracker += 1
+                        if stracker > 4:
+                            stracker = 0
+                    smud += 1
+                else:
+                    smud = 0
                 if not packet: break
                 data+=packet
-            print("# Get packed size of received data, first 8 bytes of packet")
+            # print("# Get packed size of received data, first 8 bytes of packet")
             packed_msg_size = data[:payload_size]
-            print(packed_msg_size)
-            print("# Get the initial frame data, eveything after the first 8 bytes")
+            # print(packed_msg_size)
+            # print("# Get the initial frame data, eveything after the first 8 bytes")
             data = data[payload_size:]
             # Unpack to get real size of expected message
             msg_size = struct.unpack("Q",packed_msg_size)[0]
@@ -158,18 +238,18 @@ if __name__ == '__main__':
             cv2.imshow("WATCHING %s STREAM" % (host_ip),frame)
             key = cv2.waitKey(1) & 0xFF
             if key  == ord('q') or not watching:
-                print("Leaving the Stream")
+                print("\nLeaving the Stream")
                 client_socket.sendall(b"LEAVING")
                 break
     except struct.error as e:
         # Handle case when server stops sending data, i.e. stream ended
         if len(packed_msg_size) == 0:
-            print("Stream has ended")
+            print("\nStream has ended")
         else:
             raise e
     except ConnectionResetError as e:
         if e.errno == errno.ECONNRESET:
-            print("Stream has ended")
+            print("\nStream has ended")
         else:
             raise e
     finally:
