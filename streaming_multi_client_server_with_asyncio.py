@@ -45,6 +45,7 @@ g = 2
 serialized_RSA_server_public_key = None
 RSA_server_private_key = None
 disable_ecdh = False
+loop = None
 
 # thread that listens for any input, used to terminate stream loop
 # def key_capture_thread(server_socket):
@@ -205,7 +206,7 @@ def verify(public_key, signature, message):
     )
 
 async def new_client(reader, writer):
-    global lock, stream, outputFrame, serialized_RSA_server_public_key, RSA_server_private_key, disable_ecdh
+    global lock, stream, outputFrame, serialized_RSA_server_public_key, RSA_server_private_key, disable_ecdh, loop
     try:
         # if client_socket:
             # vid = cv2.VideoCapture(0)
@@ -299,7 +300,11 @@ async def new_client(reader, writer):
                 #     break
     except KeyboardInterrupt as e:
         print("\nClient Task was canceled")
-        raise e
+        stream = False
+        loop.stop()
+        # raise e
+    except asyncio.TimeoutError:
+        print('Client Timed out')
     finally:
         writer.close()
 
