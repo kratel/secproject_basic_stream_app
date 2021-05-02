@@ -4,7 +4,7 @@ import argparse
 import errno
 # For encryption
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import dh, padding
+from cryptography.hazmat.primitives.asymmetric import dh, padding, ec
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.serialization import PublicFormat, Encoding, load_der_public_key, load_pem_public_key, load_pem_private_key
