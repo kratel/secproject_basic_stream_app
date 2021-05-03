@@ -231,6 +231,10 @@ if __name__ == '__main__':
         if data == b"HELO":
             size = client_socket.recv(2)
             serialized_RSA_server_public_key = client_socket.recv(int.from_bytes(size, "big"))
+        elif data == b"RJKT":
+            print("Stream is running in restricted mode, only whitelisted users allowed")
+            abort = True
+            exit()
         else:
             abort = True
         # === GET RSA PUBLIC KEY END ===

@@ -29,6 +29,8 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.serialization import PublicFormat, Encoding, load_der_public_key, load_pem_public_key, load_pem_private_key
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+# Needed for logging
+import logging
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 # Globals for handling the frames
@@ -46,6 +48,8 @@ serialized_RSA_server_public_key = None
 RSA_server_private_key = None
 disable_ecdh = False
 loop = None
+restricted = False
+trusted_keys_whitelist = {}
 
 # thread that listens for any input, used to terminate stream loop
 # def key_capture_thread(server_socket):
@@ -206,7 +210,8 @@ def verify(public_key, signature, message):
     )
 
 async def new_client(reader, writer):
-    global lock, stream, outputFrame, serialized_RSA_server_public_key, RSA_server_private_key, disable_ecdh, loop
+    global lock, stream, outputFrame, serialized_RSA_server_public_key, RSA_server_private_key
+    global disable_ecdh, loop, restricted, trusted_keys_whitelist
     try:
         addr =  writer.get_extra_info('peername')
         print(addr)
@@ -229,16 +234,28 @@ async def new_client(reader, writer):
             size = await reader.read(2)
             serialized_RSA_client_public_key = await reader.read(int.from_bytes(size, "big"))
             initial_message = b"HELO" + len(serialized_RSA_server_public_key).to_bytes(2, "big") + serialized_RSA_server_public_key
+            if restricted:
+                print("in restricted mode")
+                print(serialized_RSA_trsuted_client_public_key)
+                if serialized_RSA_client_public_key not in trusted_keys_whitelist:
+                    print("rejecting client")
+                    initial_message = b"RJKT"
+                    writer.write(initial_message)
+                    await writer.drain()
+                    abort = True
+                    return
             writer.write(initial_message)
             await writer.drain()
         else:
             abort = True
+            return
         data = await reader.read(5)
         if data == b"DHINI" and not abort:
             writer.write(len(host_public_key_enc).to_bytes(2, "big") + host_public_key_enc)
             await writer.drain()
         else:
             abort = True
+            return
         data = await reader.read(4)
         if data == b"PUBK" and not abort:
             # The ECDH Key
@@ -279,6 +296,7 @@ async def new_client(reader, writer):
             component_id = 1
         else:
             abort = True
+            return
         while stream and not abort:
             # img,frame = vid.read()
             data = await reader.read(1024)
@@ -341,7 +359,26 @@ async def boot_server(host_ip, port):
     # async with server:
     await server.serve_forever()
 
+def str2bool(arg):
+    if isinstance(arg, bool):
+        return arg
+    if arg.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif arg.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        print(arg)
+        raise argparse.ArgumentTypeError("Boolean value expected:\n\t'yes', 'true', 't', 'y', '1', 'no', 'false', 'f', 'n', '0'")
+
 if __name__ == '__main__':
+    main_logger_Format = "{'Timestamp':'%(asctime)s', 'Level': '%(levelname)s', 'Message': '%(message)s'}"
+    main_logger = logging.getLogger("main")
+    main_logger.setLevel(logging.WARNING)
+    main_logger_ch = logging.StreamHandler()
+    main_logger_ch.setLevel(logging.WARNING)
+    formatter = logging.Formatter(main_logger_Format)
+    main_logger_ch.setFormatter(formatter)
+    main_logger.addHandler(main_logger_ch)
     # Handle arguments
     ap = argparse.ArgumentParser()
     ap.add_argument("-i", "--host-ip", type=str, required=False,
@@ -356,9 +393,31 @@ if __name__ == '__main__':
         help="Path to RSA PEM public key", default='env/keys/server/public-key.pem')
     ap.add_argument("--rsa-priv-key", type=str, required=False,
         help="Path to RSA PEM private key", default='env/keys/server/private-key.pem')
-    ap.add_argument("--disable-ecdh", type=bool, required=False,
+    ap.add_argument("--disable-ecdh", type=str2bool, required=False,
         help="Disable Elliptic Curve key generation for Diffie-Hellman Key Exchange", default=False)
+    ap.add_argument("--restricted", type=str2bool, required=False,
+        help="Enable restricted mode, requires --whitelist argument", default=False)
+    ap.add_argument("--whitelist", type=str, required=False,
+        help="Path to folder containing trusted public keys", default="env/keys/server/trusted_keys")
     args = vars(ap.parse_args())
+    if (args["restricted"] and args["whitelist"] == "env/keys/server/trusted_keys"):
+        main_logger.warning('The --restricted argument is being run with the default whitelist')
+
+    restricted = args["restricted"]
+    if args["restricted"]:
+        # For every file in whitelist directory
+        filenames = [f for f in os.listdir(args["whitelist"]) if os.path.isfile(os.path.join(args["whitelist"], f))]
+        # Load the public key and add it to whitelist
+        for pubkfile in filenames:
+            RSA_trusted_client_public_key = None
+            with open(os.path.join(args["whitelist"], pubkfile), "rb") as key_file:
+                RSA_trusted_client_public_key = load_pem_public_key(
+                    key_file.read()
+                )
+            serialized_RSA_trsuted_client_public_key = RSA_trusted_client_public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
+            trusted_keys_whitelist[serialized_RSA_trsuted_client_public_key] = "Trusted"
+
+    print(trusted_keys_whitelist)
 
     disable_ecdh = args["disable_ecdh"]
     RSA_server_public_key = None
