@@ -5,6 +5,7 @@ import struct
 import threading
 import argparse
 import errno
+import time
 # For encryption
 from cryptography.hazmat.primitives import hashes, hmac
 from cryptography.hazmat.primitives.asymmetric import dh, rsa, padding, ec
@@ -214,6 +215,7 @@ if __name__ == '__main__':
     port = args["port"]
     abort = False
     threading.Thread(target=key_capture_thread, args=(), name='key_capture_thread', daemon=True).start()
+    frames_processed_counter = 0
     try:
 
         # Generate new dh key pairs before each connection
@@ -276,6 +278,7 @@ if __name__ == '__main__':
         payload_size = struct.calcsize("Q")
         smud = 0
         stracker = 0
+        start_time = time.time()
         while watching:
             client_socket.send(b"READY")
             # Grab packet
@@ -283,7 +286,10 @@ if __name__ == '__main__':
                 packet = client_socket.recv(4*1024)
                 if smud < 200:
                     if smud % 20 == 0:
-                        print(f"{watch_char[stracker]} watching stream {watch_char[stracker]}", end="\r")
+                        time_passed = time.time() - start_time
+                        avg_fps = frames_processed_counter / time_passed
+                        avg_fps = "{0:.2f}".format(avg_fps)
+                        print(f"{watch_char[stracker]} watching stream {watch_char[stracker]} AVG FPS: {avg_fps}", end="\r")
                         stracker += 1
                         if stracker > 4:
                             stracker = 0
@@ -353,6 +359,7 @@ if __name__ == '__main__':
                 print("\nLeaving the Stream")
                 client_socket.sendall(b"LEAVING")
                 break
+            frames_processed_counter += 1
     except struct.error as e:
         # Handle case when server stops sending data, i.e. stream ended
         if len(packed_msg_size) == 0:
@@ -362,6 +369,11 @@ if __name__ == '__main__':
     except ConnectionResetError as e:
         if e.errno == errno.ECONNRESET:
             print("\nStream has ended")
+        else:
+            raise e
+    except BrokenPipeError as e:
+        if e.errno == errno.EPIPE:
+            print("\nStream may have ended, or connection dropped.")
         else:
             raise e
     finally:
