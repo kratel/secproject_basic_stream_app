@@ -53,16 +53,6 @@ loop = None
 restricted = False
 trusted_keys_whitelist = {}
 
-
-# Setup Logging
-main_logger_Format = "{'Timestamp':'%(asctime)s', 'Level': '%(levelname)s', 'Message': '%(message)s'}"  # noqa: E501
-main_logger = logging.getLogger("main")
-main_logger.setLevel(logging.WARNING)
-main_logger_ch = logging.StreamHandler()
-main_logger_ch.setLevel(logging.WARNING)
-formatter = logging.Formatter(main_logger_Format)
-main_logger_ch.setFormatter(formatter)
-main_logger.addHandler(main_logger_ch)
 # thread that listens for any input, used to terminate stream loop
 # def key_capture_thread(server_socket):
 #     global stream
@@ -73,6 +63,7 @@ main_logger.addHandler(main_logger_ch)
 
 def capture_frames():
     global outputFrame, lock, stream, message_queues
+    main_logger = logging.getLogger("main")
     try:
         # while not event.is_set():
         while stream:
@@ -104,10 +95,10 @@ def capture_frames():
         filename = quoted_filename.strip("'")
         if os.path.exists(filename):
             os.remove(filename)
-            print("Deleted leftover temp image file")
+            main_logger.info("Deleted leftover temp image file")
     except OSError as e:
         if e.errno == 2:
-            # Temp file was not written to disk
+            main_logger.debug("During shutdown temp file was not written to disk, capture thread aborted")
             pass
         else:
             raise e
@@ -211,16 +202,19 @@ def verify(public_key, signature, message):
 async def new_client(reader, writer):
     global lock, stream, outputFrame, serialized_RSA_server_public_key, RSA_server_private_key
     global disable_ecdh, loop, restricted, trusted_keys_whitelist
+    main_logger = logging.getLogger("main")
+    client_logger = logging.getLogger("client")
+    addr = writer.get_extra_info('peername')
+    main_logger.info(f"Client connected: {addr}")
+    client_logger_extras = {'clientip': f"{addr[0]}", 'clientport': f"{addr[1]}"}
+    client_logger = logging.LoggerAdapter(client_logger, client_logger_extras)
     try:
-        addr = writer.get_extra_info('peername')
-        print(addr)
         # addr =  reader.get_extra_info('peername')
         # print(addr)
         # --------- DH Key EXCHANGE START -----------##
         if disable_ecdh:
             host_private_key, host_public_key_enc = generate_dh_key_pairs()
         else:
-            print("USING ECDH")
             host_private_key, host_public_key_enc = generate_ecdh_key_pairs()
         data = await reader.read(4)
         size = None
@@ -232,11 +226,10 @@ async def new_client(reader, writer):
             initial_message = (b"HELO" +
                                len(serialized_RSA_server_public_key).to_bytes(2, "big") +
                                serialized_RSA_server_public_key)
+            client_logger.debug(f"Public Key Received: {serialized_RSA_client_public_key}")
             if restricted:
-                print("in restricted mode")
-                print(serialized_RSA_trsuted_client_public_key)
                 if serialized_RSA_client_public_key not in trusted_keys_whitelist:
-                    print("rejecting client")
+                    client_logger.info("Rejecting client, not in whitelist")
                     initial_message = b"RJKT"
                     writer.write(initial_message)
                     await writer.drain()
@@ -259,8 +252,8 @@ async def new_client(reader, writer):
             # The ECDH Key
             size = await reader.read(2)
             remote_public_key_enc = await reader.read(int.from_bytes(size, "big"))
-            print("Size of remote's public key: ", int.from_bytes(size, "big"))
-            print("Remote's public key:\n", remote_public_key_enc)
+            client_logger.debug(f"KeyExchange: Size of remote's public key: {int.from_bytes(size, 'big')}")
+            client_logger.debug(f"Remote's public key: {remote_public_key_enc}")
             # The message signature
             size = await reader.read(2)
             remote_signature = await reader.read(int.from_bytes(size, "big"))
@@ -269,7 +262,7 @@ async def new_client(reader, writer):
                                 host_public_key_enc +
                                 remote_public_key_enc)
             verify(load_pem_public_key(serialized_RSA_client_public_key), remote_signature, intended_message)
-            print("Message Verified")
+            client_logger.info("Message Verified")
             # The host_signature to prove the intended public key was received
             host_message = serialized_RSA_server_public_key + remote_public_key_enc
             with lock:
@@ -285,15 +278,16 @@ async def new_client(reader, writer):
             # --------- DH Key EXCHANGE END -----------##
 
             derived_key = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=b'handshake data',).derive(shared_key)  # noqa: E501
-            print("Derived Key:\n", derived_key)
+            client_logger.debug(f"Derived Key: {derived_key}")
             derived_iv = HKDF(algorithm=hashes.SHA256(), length=16, salt=None, info=b'aes ofb iv',).derive(shared_key)  # noqa: E501
-            print("Derived IV:\n", derived_iv)
+            client_logger.debug(f"Derived IV: {derived_iv}")
 
             # HMAC key
             derived_hmac_key = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=b'mac',).derive(shared_key)  # noqa: E501
-
+            client_logger.debug(f"Derived HMAC Key: {derived_hmac_key}")
             # Session ID
             derived_session_id = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=b'session id',).derive(shared_key)  # noqa: E501
+            client_logger.debug(f"Derived Session ID: {derived_session_id}")
             component_id = 1
         else:
             abort = True
@@ -344,15 +338,16 @@ async def new_client(reader, writer):
                 #     # client_socket.close()
                 #     break
     except KeyboardInterrupt:
-        print("\nClient Task was canceled")
+        client_logger.info("Client Task was canceled")
         stream = False
         loop.stop()
     except asyncio.TimeoutError:
-        print('Client Timed out')
+        client_logger.info('Client Timed out')
     except ConnectionResetError:
-        print('Client left unexpectdly')
+        client_logger.info('Client left unexpectdly')
     finally:
         writer.close()
+        client_logger.info('Connection Closed')
 
 
 async def boot_server(host_ip, port):
@@ -369,11 +364,25 @@ def str2bool(arg):
     elif arg.lower() in ('no', 'false', 'f', 'n', '0'):
         return False
     else:
-        print(arg)
         raise argparse.ArgumentTypeError("Boolean value expected:\n\t'yes', 'true', 't', 'y', '1', 'no', 'false', 'f', 'n', '0'")  # noqa: E501
 
 
 if __name__ == '__main__':
+    # Setup Logging
+    main_logger_Format = '{"Timestamp":"%(asctime)s", "Logger":"%(name)s", "Level":"%(levelname)s", "Message":"%(message)s"}'  # noqa: E501
+    main_logger = logging.getLogger("main")
+    main_logger_ch = logging.StreamHandler()
+    main_formatter = logging.Formatter(main_logger_Format)
+    main_logger.setLevel(logging.WARNING)
+    main_logger_ch.setLevel(logging.WARNING)
+
+    client_logger_Format = '{"Timestamp":"%(asctime)s", "Logger":"%(name)s", "Level":"%(levelname)s", "ClientIP":"%(clientip)s", "ClientPort":"%(clientport)s", "Message":"%(message)s"}'  # noqa: E501
+    client_logger = logging.getLogger("client")
+    client_logger_ch = logging.StreamHandler()
+    client_formatter = logging.Formatter(client_logger_Format)
+    client_logger.setLevel(logging.WARNING)
+    client_logger_ch.setLevel(logging.WARNING)
+
     # Handle arguments
     ap = argparse.ArgumentParser()
     ap.add_argument("-i", "--host-ip", type=str, required=False,
@@ -394,12 +403,45 @@ if __name__ == '__main__':
                     help="Enable restricted mode, requires --whitelist argument", default=False)
     ap.add_argument("--whitelist", type=str, required=False,
                     help="Path to folder containing trusted public keys", default="env/keys/server/trusted_keys")
+    ap.add_argument("-l", "--log-level", type=str, required=False,
+                    help="Level of logging: info, debug, warning, error, default: warning", default='warning')
     args = vars(ap.parse_args())
+
+    if (args["log_level"].lower() not in ["info", "warning", "debug", "error"]):
+        argparse.error('Unexpected log level entered. Valid choices are: info, error, warning, debug')
+
+    if args["log_level"].lower() == "info":
+        main_logger.setLevel(logging.INFO)
+        main_logger_ch.setLevel(logging.INFO)
+        client_logger.setLevel(logging.INFO)
+        client_logger_ch.setLevel(logging.INFO)
+    elif args["log_level"].lower() == "warning":
+        main_logger.setLevel(logging.WARNING)
+        main_logger_ch.setLevel(logging.WARNING)
+        client_logger.setLevel(logging.WARNING)
+        client_logger_ch.setLevel(logging.WARNING)
+    elif args["log_level"].lower() == "debug":
+        main_logger.setLevel(logging.DEBUG)
+        main_logger_ch.setLevel(logging.DEBUG)
+        client_logger.setLevel(logging.DEBUG)
+        client_logger_ch.setLevel(logging.DEBUG)
+    elif args["log_level"].lower() == "error":
+        main_logger.setLevel(logging.ERROR)
+        main_logger_ch.setLevel(logging.ERROR)
+        client_logger.setLevel(logging.ERROR)
+        client_logger_ch.setLevel(logging.ERROR)
+
+    main_logger_ch.setFormatter(main_formatter)
+    main_logger.addHandler(main_logger_ch)
+    client_logger_ch.setFormatter(client_formatter)
+    client_logger.addHandler(client_logger_ch)
+
     if (args["restricted"] and args["whitelist"] == "env/keys/server/trusted_keys"):
         main_logger.warning('The --restricted argument is being run with the default whitelist')
 
     restricted = args["restricted"]
     if args["restricted"]:
+        main_logger.info("Server is running in restricted mode, setting up whitelist...")
         # For every file in whitelist directory
         filenames = [f for f in os.listdir(args["whitelist"]) if os.path.isfile(os.path.join(args["whitelist"], f))]
         # Load the public key and add it to whitelist
@@ -412,10 +454,14 @@ if __name__ == '__main__':
             serialized_RSA_trsuted_client_public_key = RSA_trusted_client_public_key.public_bytes(Encoding.PEM,
                                                                                                   PublicFormat.SubjectPublicKeyInfo)  # noqa: E501
             trusted_keys_whitelist[serialized_RSA_trsuted_client_public_key] = "Trusted"
-
-    print(trusted_keys_whitelist)
+        main_logger.info(f"{len(trusted_keys_whitelist)} Public Key(s) loaded into whitelist")
+        main_logger.debug(f"trusted_keys_whitelist = {trusted_keys_whitelist}")
 
     disable_ecdh = args["disable_ecdh"]
+    if disable_ecdh:
+        main_logger.info("ECDH is disabled, using DSA keys with Diffie-Hellman")
+    else:
+        main_logger.info("Using ECDH for key exchange")
     RSA_server_public_key = None
     RSA_server_private_key = None
     with open(args["rsa_pub_key"], "rb") as key_file:
@@ -441,32 +487,25 @@ if __name__ == '__main__':
     # pki_client_socket.close()
     # ## --------- PKI Register Pub Keys END  -----------##
 
-    print("Setting up server...")
-    # Socket Create
-    # server_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-    # server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    main_logger.info("Setting up server...")
     host_ip = args["host_ip"]
     port = args["port"]
     socket_address = (host_ip, port)
-    # event = threading.Event()
-    # threading.Thread(target=key_capture_thread, args=(server_socket,), name='key_capture_thread', daemon=True).start()
     cap_frame_thread = threading.Thread(target=capture_frames, args=(), name='capture_frames', daemon=False)
     cap_frame_thread.start()
     threads = []
 
-    print("LISTENING AT:", socket_address)
+    main_logger.info(f"LISTENING AT: {socket_address}")
     loop = asyncio.get_event_loop()
     loop.create_task(boot_server(host_ip, port))
     try:
         loop.run_forever()
-        # event.wait()
     except KeyboardInterrupt:
-        print("\nServer is manually shutting down")
+        main_logger.info("Server is manually shutting down")
         stream = False
         cap_frame_thread.join()
-        # event.set()
     finally:
-        print("Shutting Down Server")
+        main_logger.info("Shutting Down Server")
         # try:
         #     loop.stop()
         #     loop.run_until_complete(loop.shutdown_asyncgens())
@@ -488,11 +527,13 @@ if __name__ == '__main__':
             pending = asyncio.all_tasks()
             for task in pending:
                 task.cancel()
+                main_logger.debug("Lagging client task has been cancelled")
                 with suppress(asyncio.CancelledError):
                     loop.run_until_complete(task)
             # loop.run_until_complete(asyncio.gather(*pending))
         except RuntimeError as e:
             if e.args[0] == 'no running event loop':
+                main_logger.debug("All Client Connections have been closed already")
                 pass
             else:
                 raise e
