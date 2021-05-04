@@ -11,38 +11,40 @@ import numpy as np
 import pyautogui
 import imutils
 import cv2
-from PIL import UnidentifiedImageError, Image, ImageFile
+from PIL import UnidentifiedImageError, ImageFile
 import os
 # Needed for network communication
-import socket
 import pickle
 import struct
-# Needed to handle non-blocking server socket
-import select
-import queue
 # Needed to handle async calls
 import asyncio
 # For encryption
 from cryptography.hazmat.primitives import hashes, hmac
-from cryptography.hazmat.primitives.asymmetric import dh, rsa, padding, ec
+from cryptography.hazmat.primitives.asymmetric import dh, padding, ec
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives.serialization import PublicFormat, Encoding, load_der_public_key, load_pem_public_key, load_pem_private_key
+from cryptography.hazmat.primitives.serialization import PublicFormat, \
+    Encoding, load_der_public_key, load_pem_public_key, load_pem_private_key
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 # Needed for logging
 import logging
+# Needed for exit handling
+from contextlib import suppress
 
+# Setting to handle partial frames
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 # Globals for handling the frames
 outputFrame = None
 lock = threading.Lock()
+# Global to handle streaming loops
 stream = True
+# Vars for Select
 read_list = []
 write_list = []
 message_queues = {}
 dh_keyexchanges = {}
 client_derived_keys_ivs = {}
-p = 0xFFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AACAA68FFFFFFFFFFFFFFFF
+p = 0xFFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AACAA68FFFFFFFFFFFFFFFF  # noqa: E501
 g = 2
 serialized_RSA_server_public_key = None
 RSA_server_private_key = None
@@ -51,6 +53,16 @@ loop = None
 restricted = False
 trusted_keys_whitelist = {}
 
+
+# Setup Logging
+main_logger_Format = "{'Timestamp':'%(asctime)s', 'Level': '%(levelname)s', 'Message': '%(message)s'}"  # noqa: E501
+main_logger = logging.getLogger("main")
+main_logger.setLevel(logging.WARNING)
+main_logger_ch = logging.StreamHandler()
+main_logger_ch.setLevel(logging.WARNING)
+formatter = logging.Formatter(main_logger_Format)
+main_logger_ch.setFormatter(formatter)
+main_logger.addHandler(main_logger_ch)
 # thread that listens for any input, used to terminate stream loop
 # def key_capture_thread(server_socket):
 #     global stream
@@ -58,9 +70,9 @@ trusted_keys_whitelist = {}
 #     stream = False
 #     print("starting exit process")
 
+
 def capture_frames():
     global outputFrame, lock, stream, message_queues
-    # threading.Thread(target=key_capture_thread, args=(), name='key_capture_thread', daemon=True).start()
     try:
         # while not event.is_set():
         while stream:
@@ -83,12 +95,6 @@ def capture_frames():
 
             with lock:
                 outputFrame = frame.copy()
-                # for sq in message_queues:
-                #     serializedFrame = pickle.dumps(outputFrame)
-                #     message = struct.pack("Q",len(serializedFrame))+serializedFrame
-                #     message_queues[s].put(message)
-                # cv2.imshow("RECEIVING VIDEO",outputFrame)
-                # cv2.waitKey()
 
             time.sleep(0.1)
             # print("captured a screenshot")
@@ -117,6 +123,7 @@ def encrypt(key, plaintext, iv):
 
     return ciphertext
 
+
 def decrypt(key, ciphertext, iv):
     # Declare cipher type
     cipher = Cipher(algorithms.AES(key), modes.OFB(iv))
@@ -127,47 +134,35 @@ def decrypt(key, ciphertext, iv):
 
     return deciphered_text
 
+
 def generate_dh_key_pairs():
     # Hard-coded p and g for DH Key exchange (RFC 3526 - group id 14)
     global p, g
 
     # Use our p and g with cryptography library
-    params_numbers = dh.DHParameterNumbers(p,g)
+    params_numbers = dh.DHParameterNumbers(p, g)
     parameters = params_numbers.parameters(default_backend())
 
     # Generate private and public key
     host_private_key = parameters.generate_private_key()
-    host_public_key_enc= host_private_key.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+    host_public_key_enc = host_private_key.public_key().public_bytes(Encoding.DER,
+                                                                     PublicFormat.SubjectPublicKeyInfo)
     return (host_private_key, host_public_key_enc)
+
 
 def generate_ecdh_key_pairs():
     host_private_key = ec.generate_private_key(
         ec.SECP384R1()
     )
-    host_public_key_enc = host_private_key.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+    host_public_key_enc = host_private_key.public_key().public_bytes(Encoding.DER,
+                                                                     PublicFormat.SubjectPublicKeyInfo)
     return (host_private_key, host_public_key_enc)
 
-# def server_dh_key_exchange(reader, writer, host_private_key, host_public_key_enc):
-#     # Send size of public key and public key to remote
-#     client_socket.send(len(host_public_key_enc).to_bytes(2, "big") + host_public_key_enc)
-#     print("Sent host's public key to ", caddr, ":", cport)
-
-#     # Receiving size of remote's public key and remote's public key
-#     size = client_socket.recv(2)
-#     remote_public_key_enc = client_socket.recv(int.from_bytes(size, "big"))
-#     print("Size of remote's public key: ", int.from_bytes(size, "big"))
-#     print("Remote's public key:\n", remote_public_key_enc)
-
-#     # Decode remote's public key
-#     remote_public_key = load_der_public_key(remote_public_key_enc, default_backend())
-
-#     # Generate shared key
-#     shared_key = host_private_key.exchange(remote_public_key)
-#     return shared_key
 
 def encrypt_and_send_AES_OFB_message(client_socket, plaintext, key, iv):
     ciphertext = encrypt(key, plaintext, iv)
     client_socket.send(len(ciphertext).to_bytes(2, "big") + ciphertext)
+
 
 def lookupIP(client_socket, public_key):
     client_socket.send(b'1')
@@ -175,6 +170,7 @@ def lookupIP(client_socket, public_key):
     output = client_socket.recv(1024)
 
     return output
+
 
 def registerPublicKey(client_socket, public_key, private_key):
     client_socket.send(b'0')
@@ -184,6 +180,7 @@ def registerPublicKey(client_socket, public_key, private_key):
     output = client_socket.recv(1024)
 
     return output
+
 
 def sign(private_key, data):
     signature = private_key.sign(
@@ -197,6 +194,7 @@ def sign(private_key, data):
 
     return signature
 
+
 def verify(public_key, signature, message):
     # Verify signature
     public_key.verify(
@@ -209,18 +207,16 @@ def verify(public_key, signature, message):
         hashes.SHA256()
     )
 
+
 async def new_client(reader, writer):
     global lock, stream, outputFrame, serialized_RSA_server_public_key, RSA_server_private_key
     global disable_ecdh, loop, restricted, trusted_keys_whitelist
     try:
-        addr =  writer.get_extra_info('peername')
+        addr = writer.get_extra_info('peername')
         print(addr)
         # addr =  reader.get_extra_info('peername')
         # print(addr)
-        # if client_socket:
-            # vid = cv2.VideoCapture(0)
-            # global outputFrame, lock
-        ## --------- DH Key EXCHANGE START -----------##
+        # --------- DH Key EXCHANGE START -----------##
         if disable_ecdh:
             host_private_key, host_public_key_enc = generate_dh_key_pairs()
         else:
@@ -233,7 +229,9 @@ async def new_client(reader, writer):
         if data == b"HELO":
             size = await reader.read(2)
             serialized_RSA_client_public_key = await reader.read(int.from_bytes(size, "big"))
-            initial_message = b"HELO" + len(serialized_RSA_server_public_key).to_bytes(2, "big") + serialized_RSA_server_public_key
+            initial_message = (b"HELO" +
+                               len(serialized_RSA_server_public_key).to_bytes(2, "big") +
+                               serialized_RSA_server_public_key)
             if restricted:
                 print("in restricted mode")
                 print(serialized_RSA_trsuted_client_public_key)
@@ -266,7 +264,10 @@ async def new_client(reader, writer):
             # The message signature
             size = await reader.read(2)
             remote_signature = await reader.read(int.from_bytes(size, "big"))
-            intended_message = serialized_RSA_server_public_key + serialized_RSA_client_public_key + host_public_key_enc + remote_public_key_enc
+            intended_message = (serialized_RSA_server_public_key +
+                                serialized_RSA_client_public_key +
+                                host_public_key_enc +
+                                remote_public_key_enc)
             verify(load_pem_public_key(serialized_RSA_client_public_key), remote_signature, intended_message)
             print("Message Verified")
             # The host_signature to prove the intended public key was received
@@ -281,18 +282,18 @@ async def new_client(reader, writer):
             else:
                 shared_key = host_private_key.exchange(ec.ECDH(), remote_public_key)
             # client_derived_keys_ivs[s] = (derived_key, derived_iv)
-            ## --------- DH Key EXCHANGE END -----------##
+            # --------- DH Key EXCHANGE END -----------##
 
-            derived_key = HKDF(algorithm=hashes.SHA256(),length=32,salt=None,info=b'handshake data',).derive(shared_key)
+            derived_key = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=b'handshake data',).derive(shared_key)  # noqa: E501
             print("Derived Key:\n", derived_key)
-            derived_iv = HKDF(algorithm=hashes.SHA256(),length=16,salt=None,info=b'aes ofb iv',).derive(shared_key)
+            derived_iv = HKDF(algorithm=hashes.SHA256(), length=16, salt=None, info=b'aes ofb iv',).derive(shared_key)  # noqa: E501
             print("Derived IV:\n", derived_iv)
 
             # HMAC key
-            derived_hmac_key = HKDF(algorithm=hashes.SHA256(),length=32,salt=None,info=b'mac',).derive(shared_key)
+            derived_hmac_key = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=b'mac',).derive(shared_key)  # noqa: E501
 
             # Session ID
-            derived_session_id = HKDF(algorithm=hashes.SHA256(),length=32,salt=None,info=b'session id',).derive(shared_key)
+            derived_session_id = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=b'session id',).derive(shared_key)  # noqa: E501
             component_id = 1
         else:
             abort = True
@@ -311,14 +312,14 @@ async def new_client(reader, writer):
                 # print("encr_serializedFrame")
                 # print(encr_serializedFrame[:10])
                 message = derived_session_id
-                bytes_component_id = component_id.to_bytes(4,"big")
+                bytes_component_id = component_id.to_bytes(4, "big")
                 message += bytes_component_id
                 # when width was 800
                 # 1200165 when aspect ratio was 16:10
                 # 1080165 when aspect ratio was 16:9
                 # print("len encr_serializedFrame")
                 # print(len(encr_serializedFrame))
-                message += struct.pack("Q",len(encr_serializedFrame))+encr_serializedFrame
+                message += struct.pack("Q", len(encr_serializedFrame))+encr_serializedFrame
                 # Make an hmac for message
                 h = hmac.HMAC(derived_hmac_key, hashes.SHA256())
                 h.update(message)
@@ -332,7 +333,7 @@ async def new_client(reader, writer):
                 await writer.drain()
                 component_id += 1
             elif data == b'LEAVING':
-                break    
+                break
             if outputFrame is not None:
                 pass
                 # # Show the image, debugging
@@ -342,22 +343,23 @@ async def new_client(reader, writer):
                 # if key ==ord('q') or not stream:
                 #     # client_socket.close()
                 #     break
-    except KeyboardInterrupt as e:
+    except KeyboardInterrupt:
         print("\nClient Task was canceled")
         stream = False
         loop.stop()
-        # raise e
     except asyncio.TimeoutError:
         print('Client Timed out')
-    except ConnectionResetError as e:
+    except ConnectionResetError:
         print('Client left unexpectdly')
     finally:
         writer.close()
+
 
 async def boot_server(host_ip, port):
     server = await asyncio.start_server(new_client, port=port, host=host_ip)
     # async with server:
     await server.serve_forever()
+
 
 def str2bool(arg):
     if isinstance(arg, bool):
@@ -368,37 +370,30 @@ def str2bool(arg):
         return False
     else:
         print(arg)
-        raise argparse.ArgumentTypeError("Boolean value expected:\n\t'yes', 'true', 't', 'y', '1', 'no', 'false', 'f', 'n', '0'")
+        raise argparse.ArgumentTypeError("Boolean value expected:\n\t'yes', 'true', 't', 'y', '1', 'no', 'false', 'f', 'n', '0'")  # noqa: E501
+
 
 if __name__ == '__main__':
-    main_logger_Format = "{'Timestamp':'%(asctime)s', 'Level': '%(levelname)s', 'Message': '%(message)s'}"
-    main_logger = logging.getLogger("main")
-    main_logger.setLevel(logging.WARNING)
-    main_logger_ch = logging.StreamHandler()
-    main_logger_ch.setLevel(logging.WARNING)
-    formatter = logging.Formatter(main_logger_Format)
-    main_logger_ch.setFormatter(formatter)
-    main_logger.addHandler(main_logger_ch)
     # Handle arguments
     ap = argparse.ArgumentParser()
     ap.add_argument("-i", "--host-ip", type=str, required=False,
-        help="ip address to serve on", default='127.0.0.1')
+                    help="ip address to serve on", default='127.0.0.1')
     ap.add_argument("-p", "--port", type=int, required=False,
-        help="port number to listen to", default=9898)
+                    help="port number to listen to", default=9898)
     ap.add_argument("--pki-host-ip", type=str, required=False,
-        help="ip address of the PKI server to connect to", default='127.0.0.1')
+                    help="ip address of the PKI server to connect to", default='127.0.0.1')
     ap.add_argument("--pki-port", type=int, required=False,
-        help="PKI port number to connect to", default=7777)
+                    help="PKI port number to connect to", default=7777)
     ap.add_argument("--rsa-pub-key", type=str, required=False,
-        help="Path to RSA PEM public key", default='env/keys/server/public-key.pem')
+                    help="Path to RSA PEM public key", default='env/keys/server/public-key.pem')
     ap.add_argument("--rsa-priv-key", type=str, required=False,
-        help="Path to RSA PEM private key", default='env/keys/server/private-key.pem')
+                    help="Path to RSA PEM private key", default='env/keys/server/private-key.pem')
     ap.add_argument("--disable-ecdh", type=str2bool, required=False,
-        help="Disable Elliptic Curve key generation for Diffie-Hellman Key Exchange", default=False)
+                    help="Disable Elliptic Curve key generation for Diffie-Hellman Key Exchange", default=False)
     ap.add_argument("--restricted", type=str2bool, required=False,
-        help="Enable restricted mode, requires --whitelist argument", default=False)
+                    help="Enable restricted mode, requires --whitelist argument", default=False)
     ap.add_argument("--whitelist", type=str, required=False,
-        help="Path to folder containing trusted public keys", default="env/keys/server/trusted_keys")
+                    help="Path to folder containing trusted public keys", default="env/keys/server/trusted_keys")
     args = vars(ap.parse_args())
     if (args["restricted"] and args["whitelist"] == "env/keys/server/trusted_keys"):
         main_logger.warning('The --restricted argument is being run with the default whitelist')
@@ -414,7 +409,8 @@ if __name__ == '__main__':
                 RSA_trusted_client_public_key = load_pem_public_key(
                     key_file.read()
                 )
-            serialized_RSA_trsuted_client_public_key = RSA_trusted_client_public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
+            serialized_RSA_trsuted_client_public_key = RSA_trusted_client_public_key.public_bytes(Encoding.PEM,
+                                                                                                  PublicFormat.SubjectPublicKeyInfo)  # noqa: E501
             trusted_keys_whitelist[serialized_RSA_trsuted_client_public_key] = "Trusted"
 
     print(trusted_keys_whitelist)
@@ -433,7 +429,8 @@ if __name__ == '__main__':
         )
 
     # Serialize keys
-    serialized_RSA_server_public_key = RSA_server_public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
+    serialized_RSA_server_public_key = RSA_server_public_key.public_bytes(Encoding.PEM,
+                                                                          PublicFormat.SubjectPublicKeyInfo)
     # ## --------- PKI Register Pub Keys START-----------##
     # pki_client_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
     # pki_host_ip = args["pki_host_ip"]
@@ -450,23 +447,14 @@ if __name__ == '__main__':
     # server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     host_ip = args["host_ip"]
     port = args["port"]
-    socket_address = (host_ip,port)
-
-    # Socket Bind
-    # server_socket.bind(socket_address)
-
-    # Socket Listen
-    # server_socket.listen(5)
-    # server_socket.setblocking(False)
-
-    
+    socket_address = (host_ip, port)
     # event = threading.Event()
     # threading.Thread(target=key_capture_thread, args=(server_socket,), name='key_capture_thread', daemon=True).start()
     cap_frame_thread = threading.Thread(target=capture_frames, args=(), name='capture_frames', daemon=False)
     cap_frame_thread.start()
     threads = []
-    
-    print("LISTENING AT:",socket_address)
+
+    print("LISTENING AT:", socket_address)
     loop = asyncio.get_event_loop()
     loop.create_task(boot_server(host_ip, port))
     try:
