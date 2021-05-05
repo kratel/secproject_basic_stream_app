@@ -291,18 +291,13 @@ async def new_client(reader, writer):
             abort = True
             return
         while stream and not abort:
-            # img,frame = vid.read()
             data = await reader.read(1024)
             if data == b'READY':
                 # print("got a READY")
                 with lock:
                     # print("got LOCK")
                     serializedFrame = pickle.dumps(outputFrame)
-                    # print("serializedFrame")
-                    # print(serializedFrame[:10])
                 encr_serializedFrame = encrypt(derived_key, serializedFrame, derived_iv)
-                # print("encr_serializedFrame")
-                # print(encr_serializedFrame[:10])
                 message = derived_session_id
                 bytes_component_id = component_id.to_bytes(4, "big")
                 message += bytes_component_id
@@ -317,9 +312,6 @@ async def new_client(reader, writer):
                 h.update(message)
                 message_hmac = h.finalize()
                 message = message_hmac + message
-                # print(struct.pack("Q",len(encr_serializedFrame)))
-                # message = len(serializedFrame).to_bytes(8, "big")+serializedFrame
-                # print(len(serializedFrame).to_bytes(8, "big"))
                 # print("sending FRAME")
                 writer.write(message)
                 await writer.drain()
