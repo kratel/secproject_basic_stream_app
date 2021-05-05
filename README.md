@@ -133,3 +133,6 @@ To test that keys not on the whitelist will **NOT** work you must specify the ke
 ```bash
 python streaming_secured_client.py -l debug --rsa-pub-key env/keys/client/client_02/public-key.pem --rsa-priv-key env/keys/client/client_02/private-key.pem
 ```
+
+### Whitelisting a key
+To whitelist a key simply place a copy of the public key in the `env/keys/server/trusted_keys` directory. Or simply use the `--whitelist` flag to point at a directory that contains a copy of public RSA pem key files that you would like to whitelist.
