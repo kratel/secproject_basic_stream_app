@@ -8,7 +8,10 @@ The server program also supports multiple clients.
 
 _As of now this was done using purely TCP, so it won't be super performant compared to a UDP server._
 
-To use the program please follow the setup steps [Ubuntu/Debian setup](#) and [setting up venv](#)
+To use the program please follow the setup steps [Ubuntu/Debian setup](#ubuntudebian-pre-setup) and [setting up venv](#setting-up-virtualenv)
+
+## Mock PKI
+For an initial set of tests a mock PKI server was created [here](./simple_pki). Creating a PKI was out of the scope for the project, so it was left here as a proof of concept. The current code has some commented code that interacts with the mock PKI, in case you wanted to see how we planned to use it.
 
 ## Basic app references
 To create the basic app, this stack overflow answer was used as a base:
