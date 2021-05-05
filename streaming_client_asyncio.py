@@ -8,12 +8,15 @@ import errno
 import time
 # For encryption
 from cryptography.hazmat.primitives import hashes, hmac
-from cryptography.hazmat.primitives.asymmetric import dh, rsa, padding, ec
+from cryptography.hazmat.primitives.asymmetric import dh, padding, ec
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives.serialization import PublicFormat, Encoding, load_der_public_key, load_pem_public_key, load_pem_private_key
+from cryptography.hazmat.primitives.serialization import PublicFormat, \
+    Encoding, load_der_public_key, load_pem_public_key, load_pem_private_key
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.exceptions import InvalidSignature
+# Needed for logging
+import logging
 
 watching = True
 watch_char = {
@@ -25,12 +28,14 @@ watch_char = {
 }
 disable_ecdh = False
 
+
 # thread that listens for any input, used to terminate stream loop
 def key_capture_thread():
     global watching
     input()
     watching = False
     print("starting exit process")
+
 
 def encrypt(key, plaintext, iv):
     # Declare cipher type
@@ -42,6 +47,7 @@ def encrypt(key, plaintext, iv):
 
     return ciphertext
 
+
 def decrypt(key, ciphertext, iv):
     # Declare cipher type
     cipher = Cipher(algorithms.AES(key), modes.OFB(iv))
@@ -52,19 +58,21 @@ def decrypt(key, ciphertext, iv):
 
     return deciphered_text
 
+
 def generate_dh_key_pairs():
     # Hard-coded p and g for DH Key exchange (RFC 3526 - group id 14)
-    p = 0xFFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AACAA68FFFFFFFFFFFFFFFF
+    p = 0xFFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AACAA68FFFFFFFFFFFFFFFF  # noqa: E501
     g = 2
 
     # Use our p and g with cryptography library
-    params_numbers = dh.DHParameterNumbers(p,g)
+    params_numbers = dh.DHParameterNumbers(p, g)
     parameters = params_numbers.parameters(default_backend())
 
     # Generate private and public key
     host_private_key = parameters.generate_private_key()
-    host_public_key_enc= host_private_key.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+    host_public_key_enc = host_private_key.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
     return (host_private_key, host_public_key_enc)
+
 
 def generate_ecdh_key_pairs():
     host_private_key = ec.generate_private_key(
@@ -73,7 +81,10 @@ def generate_ecdh_key_pairs():
     host_public_key_enc = host_private_key.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
     return (host_private_key, host_public_key_enc)
 
-def client_dh_key_exchange(host_socket, host_private_key, host_public_key_enc, serialized_RSA_server_public_key, serialized_RSA_client_public_key, RSA_client_private_key):
+
+def client_dh_key_exchange(host_socket, host_private_key, host_public_key_enc,
+                           serialized_RSA_server_public_key, serialized_RSA_client_public_key,
+                           RSA_client_private_key):
     global disable_ecdh
     # Receiving size of remote's public key and remote's public key
     size = host_socket.recv(2)
@@ -85,15 +96,17 @@ def client_dh_key_exchange(host_socket, host_private_key, host_public_key_enc, s
     remote_public_key = load_der_public_key(remote_public_key_enc, default_backend())
 
     # Send Message to let server know it's going to send the public key
-    # host_socket.send()
-    # Send size of public key and public key to remote
-    message_to_be_signed = serialized_RSA_server_public_key + serialized_RSA_client_public_key + remote_public_key_enc + host_public_key_enc
+    # Compose constructed message for signature
+    message_to_be_signed = (serialized_RSA_server_public_key +
+                            serialized_RSA_client_public_key +
+                            remote_public_key_enc +
+                            host_public_key_enc)
     message_signature = sign(RSA_client_private_key, message_to_be_signed)
     host_socket.send(b"PUBK" +
-                    len(host_public_key_enc).to_bytes(2, "big") +
-                    host_public_key_enc +
-                    len(message_signature).to_bytes(2, "big") +
-                    message_signature)
+                     len(host_public_key_enc).to_bytes(2, "big") +
+                     host_public_key_enc +
+                     len(message_signature).to_bytes(2, "big") +
+                     message_signature)
     print("Sent host's public key to", host_ip, ":", port)
     # Get server's signature
     size = host_socket.recv(2)
@@ -111,11 +124,13 @@ def client_dh_key_exchange(host_socket, host_private_key, host_public_key_enc, s
 
     return shared_key
 
+
 def receive_and_decrypt_AES_OFB_message(host_socket, derived_key, derived_iv):
     size = host_socket.recv(2)
     ciphertext = host_socket.recv(int.from_bytes(size, "big"))
     deciphered_text = decrypt(derived_key, ciphertext, derived_iv)
     return deciphered_text
+
 
 def lookupIP(client_socket, public_key):
     client_socket.send(b'1')
@@ -123,6 +138,7 @@ def lookupIP(client_socket, public_key):
     output = client_socket.recv(1024)
 
     return output
+
 
 def registerPublicKey(client_socket, public_key, private_key):
     client_socket.send(b'0')
@@ -132,6 +148,7 @@ def registerPublicKey(client_socket, public_key, private_key):
     output = client_socket.recv(1024)
 
     return output
+
 
 def sign(private_key, data):
     signature = private_key.sign(
@@ -144,6 +161,7 @@ def sign(private_key, data):
     )
 
     return signature
+
 
 def verify(public_key, signature, message):
     print("IN VERIFY")
@@ -162,25 +180,23 @@ def verify(public_key, signature, message):
     )
 
 
-
-
 if __name__ == '__main__':
     # Handle arguments
     ap = argparse.ArgumentParser()
     ap.add_argument("-i", "--host-ip", type=str, required=False,
-        help="ip address of the server to connect to", default='127.0.0.1')
+                    help="ip address of the server to connect to", default='127.0.0.1')
     ap.add_argument("-p", "--port", type=int, required=False,
-        help="port number to connect to", default=9898)
+                    help="port number to connect to", default=9898)
     ap.add_argument("--pki-host-ip", type=str, required=False,
-        help="ip address of the PKI server to connect to", default='127.0.0.1')
+                    help="ip address of the PKI server to connect to", default='127.0.0.1')
     ap.add_argument("--pki-port", type=int, required=False,
-        help="PKI port number to connect to", default=7777)
+                    help="PKI port number to connect to", default=7777)
     ap.add_argument("--rsa-pub-key", type=str, required=False,
-        help="Path to RSA PEM public key", default='env/keys/client/client_01/public-key.pem')
+                    help="Path to RSA PEM public key", default='env/keys/client/client_01/public-key.pem')
     ap.add_argument("--rsa-priv-key", type=str, required=False,
-        help="Path to RSA PEM private key", default='env/keys/client/client_01/private-key.pem')
+                    help="Path to RSA PEM private key", default='env/keys/client/client_01/private-key.pem')
     ap.add_argument("--disable-ecdh", type=bool, required=False,
-        help="Disable Elliptic Curve key generation for Diffie-Hellman Key Exchange, needs to match server", default=False)
+                    help="Disable Elliptic Curve key generation for Diffie-Hellman Key Exchange, needs to match server", default=False)  # noqa: E501
     args = vars(ap.parse_args())
 
     disable_ecdh = args["disable_ecdh"]
@@ -197,7 +213,8 @@ if __name__ == '__main__':
         )
 
     # Serialize keys
-    serialized_RSA_client_public_key = RSA_client_public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
+    serialized_RSA_client_public_key = RSA_client_public_key.public_bytes(Encoding.PEM,
+                                                                          PublicFormat.SubjectPublicKeyInfo)
 
     # ## --------- PKI Register Pub Keys START-----------##
     # pki_client_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
@@ -210,7 +227,7 @@ if __name__ == '__main__':
     # ## --------- PKI Register Pub Keys END  -----------##
 
     # create socket
-    client_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     host_ip = args["host_ip"]
     port = args["port"]
     abort = False
@@ -224,9 +241,11 @@ if __name__ == '__main__':
         else:
             client_private_key, client_public_key_enc = generate_ecdh_key_pairs()
         # Initialize Connection
-        client_socket.connect((host_ip,port)) # a tuple
+        client_socket.connect((host_ip, port))
         serialized_RSA_server_public_key = None
-        initial_message = b"HELO" + len(serialized_RSA_client_public_key).to_bytes(2, "big") + serialized_RSA_client_public_key
+        initial_message = (b"HELO" +
+                           len(serialized_RSA_client_public_key).to_bytes(2, "big") +
+                           serialized_RSA_client_public_key)
         client_socket.sendall(initial_message)
         # === GET RSA PUBLIC KEY START ===
         data = client_socket.recv(4)
@@ -240,7 +259,6 @@ if __name__ == '__main__':
         else:
             abort = True
         # === GET RSA PUBLIC KEY END ===
-
 
         # === DH KEY EXCHANGE START ===
         client_socket.sendall(b"DHINI")
@@ -258,18 +276,18 @@ if __name__ == '__main__':
         # === DH KEY EXCHANGE END ===
 
         # Derive Key from shared key, length is in byte (32 byte = 256 bit)
-        derived_key = HKDF(algorithm=hashes.SHA256(),length=32,salt=None,info=b'handshake data',).derive(shared_key)
+        derived_key = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=b'handshake data',).derive(shared_key)
         print("Derived Key:\n", derived_key)
 
         # A 16 byte IV will be derived so both client and server has the same IV.
-        derived_iv = HKDF(algorithm=hashes.SHA256(),length=16,salt=None,info=b'aes ofb iv',).derive(shared_key)
+        derived_iv = HKDF(algorithm=hashes.SHA256(), length=16, salt=None, info=b'aes ofb iv',).derive(shared_key)
         print("Derived IV:\n", derived_iv)
 
         # HMAC key
-        derived_hmac_key = HKDF(algorithm=hashes.SHA256(),length=32,salt=None,info=b'mac',).derive(shared_key)
+        derived_hmac_key = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=b'mac',).derive(shared_key)
 
         # Session ID
-        derived_session_id = HKDF(algorithm=hashes.SHA256(),length=32,salt=None,info=b'session id',).derive(shared_key)
+        derived_session_id = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=b'session id',).derive(shared_key)  # noqa: E501
 
         component_id_tracker = 0
         # initialize data var
@@ -289,15 +307,16 @@ if __name__ == '__main__':
                         time_passed = time.time() - start_time
                         avg_fps = frames_processed_counter / time_passed
                         avg_fps = "{0:.2f}".format(avg_fps)
-                        print(f"{watch_char[stracker]} watching stream {watch_char[stracker]} AVG FPS: {avg_fps}", end="\r")
+                        print(f"{watch_char[stracker]} watching stream {watch_char[stracker]} AVG FPS: {avg_fps}", end="\r")  # noqa: E501
                         stracker += 1
                         if stracker > 4:
                             stracker = 0
                     smud += 1
                 else:
                     smud = 0
-                if not packet: break
-                data+=packet
+                if not packet:
+                    break
+                data += packet
             # print("# Get packed size of received data, first 8 bytes of packet")
             # TODO check if these are  len 0
             recv_hmac_sig = data[:32]
@@ -310,13 +329,13 @@ if __name__ == '__main__':
             if len(remote_bytes_component_id) != 4:
                 continue
             packed_msg_size = data[32+32+4:32+32+4+payload_size]
-            if len(packed_msg_size) !=  payload_size:
+            if len(packed_msg_size) != payload_size:
                 continue
             # print(packed_msg_size)
             # print("# Get the initial frame data, eveything after the first 8 bytes")
             data = data[32+32+4+payload_size:]
             # Unpack to get real size of expected message
-            msg_size = struct.unpack("Q",packed_msg_size)[0]
+            msg_size = struct.unpack("Q", packed_msg_size)[0]
             # if msg_size > 1536165:
 
             # Get the rest of the frame data
@@ -325,14 +344,14 @@ if __name__ == '__main__':
             # Store the full frame data
             frame_data = data[:msg_size]
 
-            ## Verification
+            # Verification
             # Verify HMAC
             recv_message = remote_session_id + remote_bytes_component_id + packed_msg_size + frame_data
             h = hmac.HMAC(derived_hmac_key, hashes.SHA256())
             h.update(recv_message)
             try:
                 h.verify(recv_hmac_sig)
-            except InvalidSignature as e:
+            except InvalidSignature:
                 continue
 
             # Verify session id matches
@@ -353,9 +372,9 @@ if __name__ == '__main__':
             # Deserialize frame data
             frame = pickle.loads(frame_data)
             # Display the images
-            cv2.imshow("WATCHING %s STREAM" % (host_ip),frame)
+            cv2.imshow("WATCHING %s STREAM" % (host_ip), frame)
             key = cv2.waitKey(1) & 0xFF
-            if key  == ord('q') or not watching:
+            if key == ord('q') or not watching:
                 print("\nLeaving the Stream")
                 client_socket.sendall(b"LEAVING")
                 break
