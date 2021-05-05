@@ -392,15 +392,19 @@ if __name__ == '__main__':
     ap.add_argument("--pki-port", type=int, required=False,
                     help="PKI port number to connect to, default: 7777", default=7777)
     ap.add_argument("--rsa-pub-key", type=str, required=False,
-                    help="Path to RSA PEM public key, default: env/keys/server/public-key.pem", default='env/keys/server/public-key.pem')
+                    help="Path to RSA PEM public key, default: env/keys/server/public-key.pem",
+                    default='env/keys/server/public-key.pem')
     ap.add_argument("--rsa-priv-key", type=str, required=False,
-                    help="Path to RSA PEM private key, default: env/keys/server/private-key.pem", default='env/keys/server/private-key.pem')
+                    help="Path to RSA PEM private key, default: env/keys/server/private-key.pem",
+                    default='env/keys/server/private-key.pem')
     ap.add_argument("--disable-ecdh", type=str2bool, required=False,
-                    help="Disable Elliptic Curve key generation for Diffie-Hellman Key Exchange, default: False", default=False)
+                    help="Disable Elliptic Curve key generation for Diffie-Hellman Key Exchange, default: False",
+                    default=False)
     ap.add_argument("--restricted", type=str2bool, required=False,
                     help="Enable restricted mode, requires --whitelist argument, default: False", default=False)
     ap.add_argument("--whitelist", type=str, required=False,
-                    help="Path to folder containing trusted public keys, default: env/keys/server/trusted_keys", default="env/keys/server/trusted_keys")
+                    help="Path to folder containing trusted public keys, default: env/keys/server/trusted_keys",
+                    default="env/keys/server/trusted_keys")
     ap.add_argument("-l", "--log-level", type=str, required=False,
                     help="Level of logging: info, debug, warning, error, default: warning", default='warning')
     args = vars(ap.parse_args())
