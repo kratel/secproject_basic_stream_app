@@ -209,8 +209,6 @@ async def new_client(reader, writer):
     client_logger_extras = {'clientip': f"{addr[0]}", 'clientport': f"{addr[1]}"}
     client_logger = logging.LoggerAdapter(client_logger, client_logger_extras)
     try:
-        # addr =  reader.get_extra_info('peername')
-        # print(addr)
         # --------- DH Key EXCHANGE START -----------##
         if disable_ecdh:
             host_private_key, host_public_key_enc = generate_dh_key_pairs()
@@ -386,23 +384,23 @@ if __name__ == '__main__':
     # Handle arguments
     ap = argparse.ArgumentParser()
     ap.add_argument("-i", "--host-ip", type=str, required=False,
-                    help="ip address to serve on", default='127.0.0.1')
+                    help="ip address to serve on, default: 127.0.0.1", default='127.0.0.1')
     ap.add_argument("-p", "--port", type=int, required=False,
-                    help="port number to listen to", default=9898)
+                    help="port number to listen to, default: 9898", default=9898)
     ap.add_argument("--pki-host-ip", type=str, required=False,
-                    help="ip address of the PKI server to connect to", default='127.0.0.1')
+                    help="ip address of the PKI server to connect to, default: 127.0.0.1", default='127.0.0.1')
     ap.add_argument("--pki-port", type=int, required=False,
-                    help="PKI port number to connect to", default=7777)
+                    help="PKI port number to connect to, default: 7777", default=7777)
     ap.add_argument("--rsa-pub-key", type=str, required=False,
-                    help="Path to RSA PEM public key", default='env/keys/server/public-key.pem')
+                    help="Path to RSA PEM public key, default: env/keys/server/public-key.pem", default='env/keys/server/public-key.pem')
     ap.add_argument("--rsa-priv-key", type=str, required=False,
-                    help="Path to RSA PEM private key", default='env/keys/server/private-key.pem')
+                    help="Path to RSA PEM private key, default: env/keys/server/private-key.pem", default='env/keys/server/private-key.pem')
     ap.add_argument("--disable-ecdh", type=str2bool, required=False,
-                    help="Disable Elliptic Curve key generation for Diffie-Hellman Key Exchange", default=False)
+                    help="Disable Elliptic Curve key generation for Diffie-Hellman Key Exchange, default: False", default=False)
     ap.add_argument("--restricted", type=str2bool, required=False,
-                    help="Enable restricted mode, requires --whitelist argument", default=False)
+                    help="Enable restricted mode, requires --whitelist argument, default: False", default=False)
     ap.add_argument("--whitelist", type=str, required=False,
-                    help="Path to folder containing trusted public keys", default="env/keys/server/trusted_keys")
+                    help="Path to folder containing trusted public keys, default: env/keys/server/trusted_keys", default="env/keys/server/trusted_keys")
     ap.add_argument("-l", "--log-level", type=str, required=False,
                     help="Level of logging: info, debug, warning, error, default: warning", default='warning')
     args = vars(ap.parse_args())
