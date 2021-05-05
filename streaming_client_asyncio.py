@@ -32,9 +32,10 @@ disable_ecdh = False
 # thread that listens for any input, used to terminate stream loop
 def key_capture_thread():
     global watching
+    main_logger = logging.getLogger("main")
     input()
     watching = False
-    print("starting exit process")
+    main_logger.info("Starting exit process")
 
 
 def encrypt(key, plaintext, iv):
@@ -86,11 +87,12 @@ def client_dh_key_exchange(host_socket, host_private_key, host_public_key_enc,
                            serialized_RSA_server_public_key, serialized_RSA_client_public_key,
                            RSA_client_private_key):
     global disable_ecdh
+    main_logger = logging.getLogger("main")
     # Receiving size of remote's public key and remote's public key
     size = host_socket.recv(2)
     remote_public_key_enc = host_socket.recv(int.from_bytes(size, "big"))
-    print("Size of remote's public key: ", int.from_bytes(size, "big"))
-    print("Remote's public key:\n", remote_public_key_enc)
+    main_logger.debug(f"Size of remote's public key: {int.from_bytes(size, 'big')}")
+    main_logger.debug(f"Remote's public key: {remote_public_key_enc}")
 
     # Decode remote's public key
     remote_public_key = load_der_public_key(remote_public_key_enc, default_backend())
@@ -107,7 +109,7 @@ def client_dh_key_exchange(host_socket, host_private_key, host_public_key_enc,
                      host_public_key_enc +
                      len(message_signature).to_bytes(2, "big") +
                      message_signature)
-    print("Sent host's public key to", host_ip, ":", port)
+    main_logger.debug(f"Sent host's public key to {host_ip}:{port}")
     # Get server's signature
     size = host_socket.recv(2)
     remote_signature = host_socket.recv(int.from_bytes(size, "big"))
@@ -120,7 +122,7 @@ def client_dh_key_exchange(host_socket, host_private_key, host_public_key_enc,
         shared_key = host_private_key.exchange(remote_public_key)
     else:
         shared_key = host_private_key.exchange(ec.ECDH(), remote_public_key)
-    print("Shared Key:\n", shared_key)
+    main_logger.debug(f"Shared Key: {shared_key}")
 
     return shared_key
 
@@ -164,10 +166,11 @@ def sign(private_key, data):
 
 
 def verify(public_key, signature, message):
-    print("IN VERIFY")
-    print("public_key:\n", public_key)
-    print("signature:\n", signature)
-    print("message:\n", message)
+    main_logger = logging.getLogger("main")
+    main_logger.debug("Verifying")
+    main_logger.debug(f"public_key: {public_key}")
+    main_logger.debug(f"signature: {signature}")
+    main_logger.debug(f"message: {message}")
     # Verify signature
     public_key.verify(
         signature,
@@ -181,6 +184,14 @@ def verify(public_key, signature, message):
 
 
 if __name__ == '__main__':
+    # Setup Logging
+    main_logger_Format = '{"Timestamp":"%(asctime)s", "Logger":"%(name)s", "Level":"%(levelname)s", "Message":"%(message)s"}'  # noqa: E501
+    main_logger = logging.getLogger("main")
+    main_logger_ch = logging.StreamHandler()
+    main_formatter = logging.Formatter(main_logger_Format)
+    main_logger.setLevel(logging.WARNING)
+    main_logger_ch.setLevel(logging.WARNING)
+
     # Handle arguments
     ap = argparse.ArgumentParser()
     ap.add_argument("-i", "--host-ip", type=str, required=False,
@@ -197,11 +208,37 @@ if __name__ == '__main__':
                     help="Path to RSA PEM private key", default='env/keys/client/client_01/private-key.pem')
     ap.add_argument("--disable-ecdh", type=bool, required=False,
                     help="Disable Elliptic Curve key generation for Diffie-Hellman Key Exchange, needs to match server", default=False)  # noqa: E501
+    ap.add_argument("-l", "--log-level", type=str, required=False,
+                    help="Level of logging: info, debug, warning, error, default: warning", default='warning')
     args = vars(ap.parse_args())
 
+    if (args["log_level"].lower() not in ["info", "warning", "debug", "error"]):
+        argparse.error('Unexpected log level entered. Valid choices are: info, error, warning, debug')
+
+    if args["log_level"].lower() == "info":
+        main_logger.setLevel(logging.INFO)
+        main_logger_ch.setLevel(logging.INFO)
+    elif args["log_level"].lower() == "warning":
+        main_logger.setLevel(logging.WARNING)
+        main_logger_ch.setLevel(logging.WARNING)
+    elif args["log_level"].lower() == "debug":
+        main_logger.setLevel(logging.DEBUG)
+        main_logger_ch.setLevel(logging.DEBUG)
+    elif args["log_level"].lower() == "error":
+        main_logger.setLevel(logging.ERROR)
+        main_logger_ch.setLevel(logging.ERROR)
+
+    main_logger_ch.setFormatter(main_formatter)
+    main_logger.addHandler(main_logger_ch)
+
     disable_ecdh = args["disable_ecdh"]
+    if disable_ecdh:
+        main_logger.info("ECDH is disabled, using DSA keys with Diffie-Hellman")
+    else:
+        main_logger.info("Using ECDH for key exchange")
     RSA_client_public_key = None
     RSA_client_private_key = None
+    main_logger.info("Loading RSA keys...")
     with open(args["rsa_pub_key"], "rb") as key_file:
         RSA_client_public_key = load_pem_public_key(
             key_file.read()
@@ -222,7 +259,7 @@ if __name__ == '__main__':
     # pki_port = args["pki_port"]
     # pki_client_socket.connect((pki_host_ip,pki_port))
     # response = registerPublicKey(pki_client_socket, serialized_RSA_client_public_key, RSA_client_private_key)
-    # print("response:", response)
+    # main_logger.info("PKI response:", response)
     # pki_client_socket.close()
     # ## --------- PKI Register Pub Keys END  -----------##
 
@@ -253,7 +290,7 @@ if __name__ == '__main__':
             size = client_socket.recv(2)
             serialized_RSA_server_public_key = client_socket.recv(int.from_bytes(size, "big"))
         elif data == b"RJKT":
-            print("Stream is running in restricted mode, only whitelisted users allowed")
+            main_logger.info("Stream is running in restricted mode, only whitelisted users allowed")
             abort = True
             exit()
         else:
@@ -268,27 +305,25 @@ if __name__ == '__main__':
                                             serialized_RSA_server_public_key,
                                             serialized_RSA_client_public_key,
                                             RSA_client_private_key)
-        print("ran DH func")
         data = client_socket.recv(5)
-        print(data)
         if data == b"DHFIN":
-            print("DH Exchange complete")
+            main_logger.debug("Finished DH Key Exchange")
         # === DH KEY EXCHANGE END ===
 
         # Derive Key from shared key, length is in byte (32 byte = 256 bit)
         derived_key = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=b'handshake data',).derive(shared_key)
-        print("Derived Key:\n", derived_key)
+        main_logger.debug(f"Derived Key: {derived_key}")
 
         # A 16 byte IV will be derived so both client and server has the same IV.
         derived_iv = HKDF(algorithm=hashes.SHA256(), length=16, salt=None, info=b'aes ofb iv',).derive(shared_key)
-        print("Derived IV:\n", derived_iv)
+        main_logger.debug("Derived IV: {derived_iv}")
 
         # HMAC key
         derived_hmac_key = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=b'mac',).derive(shared_key)
-
+        main_logger.debug(f"Derived HMAC Key: {derived_hmac_key}")
         # Session ID
         derived_session_id = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=b'session id',).derive(shared_key)  # noqa: E501
-
+        main_logger.debug(f"Derived Session ID: {derived_session_id}")
         component_id_tracker = 0
         # initialize data var
         data = b""
@@ -317,8 +352,7 @@ if __name__ == '__main__':
                 if not packet:
                     break
                 data += packet
-            # print("# Get packed size of received data, first 8 bytes of packet")
-            # TODO check if these are  len 0
+            # Verify data sizes
             recv_hmac_sig = data[:32]
             if len(recv_hmac_sig) != 32:
                 continue
@@ -331,13 +365,10 @@ if __name__ == '__main__':
             packed_msg_size = data[32+32+4:32+32+4+payload_size]
             if len(packed_msg_size) != payload_size:
                 continue
-            # print(packed_msg_size)
-            # print("# Get the initial frame data, eveything after the first 8 bytes")
+            # Get the encrypted frame
             data = data[32+32+4+payload_size:]
             # Unpack to get real size of expected message
             msg_size = struct.unpack("Q", packed_msg_size)[0]
-            # if msg_size > 1536165:
-
             # Get the rest of the frame data
             while (len(data) < msg_size) and (len(data) < 1536165):
                 data += client_socket.recv(4*1024)
@@ -375,24 +406,24 @@ if __name__ == '__main__':
             cv2.imshow("WATCHING %s STREAM" % (host_ip), frame)
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q') or not watching:
-                print("\nLeaving the Stream")
+                main_logger.info("Leaving the Stream")
                 client_socket.sendall(b"LEAVING")
                 break
             frames_processed_counter += 1
     except struct.error as e:
         # Handle case when server stops sending data, i.e. stream ended
         if len(packed_msg_size) == 0:
-            print("\nStream has ended")
+            main_logger.info("Stream has ended")
         else:
             raise e
     except ConnectionResetError as e:
         if e.errno == errno.ECONNRESET:
-            print("\nStream has ended")
+            main_logger.info("Stream has ended")
         else:
             raise e
     except BrokenPipeError as e:
         if e.errno == errno.EPIPE:
-            print("\nStream may have ended, or connection dropped.")
+            main_logger.info("Stream may have ended, or connection dropped.")
         else:
             raise e
     finally:
