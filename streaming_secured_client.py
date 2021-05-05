@@ -203,11 +203,14 @@ if __name__ == '__main__':
     ap.add_argument("--pki-port", type=int, required=False,
                     help="PKI port number to connect to, default: 7777", default=7777)
     ap.add_argument("--rsa-pub-key", type=str, required=False,
-                    help="Path to RSA PEM public key, default: env/keys/client/client_01/public-key.pem", default='env/keys/client/client_01/public-key.pem')
+                    help="Path to RSA PEM public key, default: env/keys/client/client_01/public-key.pem",
+                    default='env/keys/client/client_01/public-key.pem')
     ap.add_argument("--rsa-priv-key", type=str, required=False,
-                    help="Path to RSA PEM private key, default: env/keys/client/client_01/private-key.pem", default='env/keys/client/client_01/private-key.pem')
+                    help="Path to RSA PEM private key, default: env/keys/client/client_01/private-key.pem",
+                    default='env/keys/client/client_01/private-key.pem')
     ap.add_argument("--disable-ecdh", type=bool, required=False,
-                    help="Disable Elliptic Curve key generation for Diffie-Hellman Key Exchange, needs to match server, default: False", default=False)  # noqa: E501
+                    help="Disable Elliptic Curve key generation for Diffie-Hellman Key Exchange, needs to match server, default: False",    # noqa: E501
+                    default=False)
     ap.add_argument("-l", "--log-level", type=str, required=False,
                     help="Level of logging: info, debug, warning, error, default: warning", default='warning')
     args = vars(ap.parse_args())
