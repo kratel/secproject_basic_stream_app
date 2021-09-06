@@ -1,3 +1,10 @@
+# Video Presentation
+Click the thumbnail to go to the youtube video.
+
+[![Video Presentation](https://i.ytimg.com/vi/6ciqxq1OPvw/hqdefault.jpg?sqp=-oaymwEcCOADEI4CSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLDpQGbY-H3hVRSZZ49Bg1mMOezXYw)](https://www.youtube.com/watch?v=6ciqxq1OPvw)
+
+Direct Link: https://www.youtube.com/watch?v=6ciqxq1OPvw
+
 # secproject_basic_stream_app
 
 **Developed with** Python 3.9
